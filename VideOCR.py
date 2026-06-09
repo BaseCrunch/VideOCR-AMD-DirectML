@@ -1302,6 +1302,7 @@ class VideoHandler:
         self.height: int = 0
         self.duration_ms: int = 0
 
+        self.newly_opened: bool = False
         self.last_pts: int | None = None
 
         self.graph: av.filter.Graph | None = None
@@ -1354,6 +1355,7 @@ class VideoHandler:
             self.path = path
             self.width = int(self.stream.width)
             self.height = int(self.stream.height)
+            self.newly_opened = True
 
             if self.container.duration is not None:
                 self.duration_ms = int(self.container.duration / 1000.0)
@@ -1383,13 +1385,28 @@ class VideoHandler:
             seek_threshold = int(1.5 / tb)
 
             should_seek = True
-            if self.last_pts is not None:
+
+            if self.newly_opened and timestamp_ms == 0:
+                should_seek = False
+            elif self.last_pts is not None:
                 if self.last_pts <= target_pts <= (self.last_pts + seek_threshold):
                     should_seek = False
 
+            self.newly_opened = False
+
             if should_seek:
-                self.container.seek(target_pts, stream=self.stream)
-                self.last_pts = None
+                try:
+                    self.container.seek(target_pts, stream=self.stream)
+                    self.last_pts = None
+                except Exception as e:
+                    if target_pts <= 0 and getattr(e, 'errno', None) == 1:
+                        saved_path = self.path
+                        self.close()
+                        if saved_path:
+                            self.open(saved_path)
+                        self.newly_opened = False
+                    else:
+                        raise
 
             frame: av.VideoFrame | None = None
             for f in self.container.decode(self.stream):
@@ -1438,6 +1455,7 @@ class VideoHandler:
         self.container = self.stream = self.path = self.graph = self.buffer_node = self.sink_node = None
         self.width = self.height = 0
         self.duration_ms = 0
+        self.last_pts = None
         self.last_display_size = (0, 0)
         self.current_new_w = self.current_new_h = 0
 
