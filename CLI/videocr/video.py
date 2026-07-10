@@ -7,6 +7,7 @@ import os
 import queue
 import re
 import shutil
+import subprocess
 import threading
 import time
 from typing import Any, cast
@@ -42,6 +43,7 @@ class Video:
     frame_timestamps: dict[int, float]
     start_time_offset_ms: float
     avg_frame_duration_ms: float
+    fps: float
 
     def __init__(self, path: str, paddleocr_path: str, det_model_dir: str, rec_model_dir: str, cls_model_dir: str, google_lens_path: str) -> None:
         self.path = path
@@ -59,11 +61,275 @@ class Video:
         self.width = props['width']
         self.duration_ms = props['duration_ms']
         self.start_time_offset_ms = props['start_time_offset_ms']
+        self.fps = float(props.get('fps', 0.0) or 0.0)
+
+
+    def _run_easyocr_directml_ffmpeg_hw_scan(
+            self, temp_dir: str, target_end_str: str, ssim_threshold_ratio: float, subtitle_position: str,
+            brightness_threshold: int | None, frames_to_skip: int, max_stitch_width: int, max_stitch_height: int,
+            directml_recognition_mode: str, use_gpu: bool, ocr_engine: str, conf_threshold_ratio: float, lang: str,
+            normalize_to_simplified_chinese: bool, step1_start: float, perf_total_start: float) -> bool:
+        """Experimental AMD path: FFmpeg D3D11VA decode + raw cropped frames.
+
+        This mode supports the common single subtitle crop workflow first. FFmpeg
+        is asked to use Windows D3D11VA hardware acceleration while decoding, and
+        the cropped/scaled RGB subtitle frames are streamed into VideOCR's
+        existing stitched OCR grid pipeline.
+        """
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            print("Warning: FFmpeg was not found on PATH. Falling back to PyAV CPU frame scan.", flush=True)
+            return False
+
+        if len(self.validated_zones) != 1:
+            print("Warning: FFmpeg D3D11VA prototype currently supports one OCR zone. Falling back to PyAV CPU frame scan.", flush=True)
+            return False
+
+        if self.fps <= 0:
+            print("Warning: Could not determine input FPS for FFmpeg D3D11VA timestamp mapping. Falling back to PyAV CPU frame scan.", flush=True)
+            return False
+
+        zone_idx = 0
+        z = self.validated_zones[0]
+        target_w = int(z['w'])
+        target_h = int(z['h'])
+        frame_bytes = target_w * target_h * 3
+        modulo = frames_to_skip + 1
+
+        det_stitched_dir = os.path.join(temp_dir, "det_stitched")
+        os.makedirs(det_stitched_dir, exist_ok=True)
+        det_stitch_map: dict[str, list[dict[str, Any]]] = {}
+        det_counter = 0
+        det_batch: list[Any] = []
+        GRID_SPACING = 10
+        FILENAME_ZERO_PADDING = 8
+        batch_limit = utils.get_batch_limit(target_w, target_h, max_stitch_width, max_stitch_height, GRID_SPACING)
+
+        prev_sample = None
+        dml_frame_filter = None
+        if ssim_threshold_ratio < 1:
+            try:
+                requested_index = os.environ.get("VIDEOCR_DIRECTML_DEVICE_INDEX", "").strip()
+                device_index = int(requested_index) if requested_index else None
+                from .directml_frame_filter import DirectMLFrameSimilarityFilter
+                dml_frame_filter = DirectMLFrameSimilarityFilter(ssim_threshold_ratio, device_index=device_index)
+                print(
+                    f"Step 1 frame scan mode: FFmpeg D3D11VA hardware decode + DirectML SSIM on adapter {dml_frame_filter.device_label}.",
+                    flush=True
+                )
+            except Exception as e:
+                dml_frame_filter = None
+                print(f"Warning: DirectML SSIM failed in FFmpeg mode; using CPU SSIM after hardware decode: {e}", flush=True)
+        else:
+            print("Step 1 frame scan mode: FFmpeg D3D11VA hardware decode without SSIM filtering.", flush=True)
+
+        def save_stitch_batch(batch: list[Any], counter: int) -> int:
+            frame_path, canvas_w, canvas_h, draw_instructions = utils.prepare_stitch_batch(
+                batch, counter, zone_idx, "det_stitched", det_stitched_dir,
+                det_stitch_map, max_stitch_width, GRID_SPACING, FILENAME_ZERO_PADDING
+            )
+            canvas = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
+            for img, x, y in draw_instructions:
+                h, w = img.shape[:2]
+                canvas[y:y + h, x:x + w] = img
+            Image.fromarray(canvas).save(frame_path, quality=80)
+            return counter + 1
+
+        vf = f"select=not(mod(n\\,{modulo})),crop={z['crop_str']},scale={z['scale_str']},format=rgb24"
+        cmd = [
+            ffmpeg_path,
+            "-hide_banner",
+            "-loglevel", "warning",
+            "-hwaccel", "d3d11va",
+            "-i", self.path,
+            "-vf", vf,
+            "-vsync", "0",
+            "-an",
+            "-sn",
+            "-f", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "pipe:1",
+        ]
+
+        print("Starting FFmpeg D3D11VA hardware decode prototype...", flush=True)
+        print(f"[Perf] FFmpeg filter: {vf}", flush=True)
+
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=frame_bytes * 4)
+        stderr_lines: list[str] = []
+
+        def stderr_reader() -> None:
+            assert proc.stderr is not None
+            for raw_line in iter(proc.stderr.readline, b""):
+                try:
+                    line = raw_line.decode(errors="replace").strip()
+                except Exception:
+                    line = str(raw_line)
+                if line:
+                    stderr_lines.append(line)
+                    if len(stderr_lines) > 40:
+                        del stderr_lines[:20]
+
+        err_thread = threading.Thread(target=stderr_reader, daemon=True)
+        err_thread.start()
+
+        ocr_end = 0
+        kept_frames = 0
+        skipped_similar = 0
+
+        try:
+            assert proc.stdout is not None
+            while True:
+                data = proc.stdout.read(frame_bytes)
+                if not data:
+                    break
+                if len(data) != frame_bytes:
+                    raise RuntimeError(f"FFmpeg returned a partial raw frame ({len(data)} / {frame_bytes} bytes).")
+
+                frame_index = ocr_end
+                timestamp_ms = self.start_time_offset_ms + (frame_index * modulo * 1000.0 / self.fps)
+                self.frame_timestamps[frame_index] = timestamp_ms
+                curr_str = utils.get_srt_timestamp_from_ms(timestamp_ms - self.start_time_offset_ms).split(',')[0]
+
+                img = np.frombuffer(data, dtype=np.uint8).reshape((target_h, target_w, 3)).copy()
+
+                if brightness_threshold is not None:
+                    gray = (
+                        (img[..., 0].astype(np.uint16) * 77 +
+                         img[..., 1].astype(np.uint16) * 150 +
+                         img[..., 2].astype(np.uint16) * 29) >> 8
+                    ).astype(np.uint8)
+                    mask = gray > brightness_threshold
+                    img *= mask[..., None]
+
+                keep_frame = True
+                if ssim_threshold_ratio < 1:
+                    w = img.shape[1]
+                    if subtitle_position == "center":
+                        w_margin = int(w * 0.35)
+                        sample = img[:, w_margin:w - w_margin]
+                    elif subtitle_position == "left":
+                        sample = img[:, :int(w * 0.3)]
+                    elif subtitle_position == "right":
+                        sample = img[:, int(w * 0.7):]
+                    elif subtitle_position == "any":
+                        sample = img
+                    else:
+                        raise ValueError(f"Invalid subtitle_position: {subtitle_position}")
+
+                    if prev_sample is not None:
+                        if dml_frame_filter is not None:
+                            keep_frame = not dml_frame_filter.is_similar(prev_sample, sample)
+                        else:
+                            keep_frame = not (fast_ssim.ssim(prev_sample, sample, data_range=255) > ssim_threshold_ratio)
+                    prev_sample = sample
+
+                if keep_frame:
+                    det_batch.append({"img": img, "frame_idx": frame_index})
+                    kept_frames += 1
+                    if len(det_batch) >= batch_limit:
+                        det_counter = save_stitch_batch(det_batch, det_counter)
+                        det_batch = []
+                else:
+                    skipped_similar += 1
+
+                if frame_index % 15 == 0:
+                    print(f"\rStep 1/3: FFmpeg/D3D11VA scan... Current: {curr_str} / {target_end_str}, Sample: {frame_index + 1}", end="", flush=True)
+
+                ocr_end += 1
+        finally:
+            if proc.stdout:
+                proc.stdout.close()
+            return_code = proc.wait()
+            err_thread.join(timeout=2)
+
+        print(flush=True)
+
+        if return_code != 0:
+            recent = "\n".join(stderr_lines[-20:])
+            raise RuntimeError(f"FFmpeg D3D11VA scan failed with exit code {return_code}. Recent FFmpeg output:\n{recent}")
+
+        if det_batch:
+            det_counter = save_stitch_batch(det_batch, det_counter)
+
+        if ocr_end <= 0 or det_counter <= 0:
+            print("Warning: FFmpeg D3D11VA scan produced no OCR grids. Falling back to PyAV CPU frame scan.", flush=True)
+            return False
+
+        if len(self.frame_timestamps) > 1:
+            min_idx = min(self.frame_timestamps.keys())
+            max_idx = max(self.frame_timestamps.keys())
+            if max_idx > min_idx:
+                total_duration = self.frame_timestamps[max_idx] - self.frame_timestamps[min_idx]
+                self.avg_frame_duration_ms = total_duration / (max_idx - min_idx)
+
+        step1_end = time.perf_counter()
+        if dml_frame_filter is not None:
+            print(f"[Perf] DirectML frame scan comparisons: {dml_frame_filter.comparisons}, filtered: {dml_frame_filter.filtered}", flush=True)
+        print(f"[Perf] FFmpeg/D3D11VA sampled frames: {ocr_end}; kept for OCR: {kept_frames}; SSIM-skipped: {skipped_similar}", flush=True)
+
+        from .easyocr_directml import run_easyocr_on_stitched_images
+
+        total_stitched_frames = sum(len(mappings) for mappings in det_stitch_map.values())
+        total_grids = len(det_stitch_map)
+        avg_frames_per_grid = total_stitched_frames / total_grids if total_grids else 0.0
+        print(
+            f"Running EasyOCR DirectML pass on {total_stitched_frames} filtered frame(s) "
+            f"stitched into {total_grids} image grid(s) "
+            f"({avg_frames_per_grid:.1f} frame(s)/grid)...",
+            flush=True
+        )
+
+        directml_ocr_start = time.perf_counter()
+        ocr_outputs = run_easyocr_on_stitched_images(
+            det_stitched_dir,
+            det_stitch_map,
+            self.lang,
+            use_gpu,
+            directml_recognition_mode
+        )
+        directml_ocr_end = time.perf_counter()
+
+        active_frame_coords: set[tuple[int, int]] = set()
+        for mappings in det_stitch_map.values():
+            for m in mappings:
+                active_frame_coords.add((int(m["frame_idx"]), int(m["zone_idx"])))
+
+        frame_predictions_dict: dict[int, dict[int, PredictedFrames]] = {0: {}, 1: {}}
+        for frame_index, zone_index in active_frame_coords:
+            ocr_result = ocr_outputs.get((frame_index, zone_index), [])
+            pred_data = [ocr_result] if ocr_result else [[]]
+            predicted_frame = PredictedFrames(
+                ocr_engine, frame_index, pred_data, conf_threshold_ratio,
+                zone_index, lang, normalize_to_simplified_chinese
+            )
+            frame_predictions_dict[zone_index][frame_index] = predicted_frame
+
+        frame_predictions_list: dict[int, list[PredictedFrames]] = {}
+        for z_idx in frame_predictions_dict:
+            frames = sorted(frame_predictions_dict[z_idx].values(), key=lambda f: f.start_index)
+            if not frames:
+                continue
+            for i in range(len(frames) - 1):
+                frames[i].end_index = frames[i + 1].start_index - 1
+            frames[-1].end_index = ocr_end - 1
+            frame_predictions_list[z_idx] = frames
+
+        self.pred_frames_zone1 = frame_predictions_list.get(0, [])
+        self.pred_frames_zone2 = frame_predictions_list.get(1, [])
+
+        total_elapsed = time.perf_counter() - perf_total_start
+        print(f"[Perf] Step 1 FFmpeg/D3D11VA decode/filter/stitch: {step1_end - step1_start:.2f}s", flush=True)
+        print(f"[Perf] Step 2 EasyOCR DirectML hybrid OCR: {directml_ocr_end - directml_ocr_start:.2f}s", flush=True)
+        print(f"[Perf] Filtered OCR frames: {total_stitched_frames}; stitched grids: {total_grids}; average frames/grid: {avg_frames_per_grid:.1f}", flush=True)
+        print(f"[Perf] Total OCR preparation/runtime before subtitle merge: {total_elapsed:.2f}s", flush=True)
+        return True
 
     def run_ocr(self, use_gpu: bool, ocr_engine: str, lang: str, use_angle_cls: bool, time_start: str, time_end: str, conf_threshold: int,
                 use_fullframe: bool, brightness_threshold: int | None, ssim_threshold: int, subtitle_position: str, frames_to_skip: int,
                 crop_zones: list[dict[str, int]], ocr_image_max_width: int, normalize_to_simplified_chinese: bool,
-                directml_grid_max_width: int = 2400, directml_grid_max_height: int = 2400) -> None:
+                directml_grid_max_width: int = 2400, directml_grid_max_height: int = 2400,
+                directml_performance_preset: str = "balanced", directml_recognition_mode: str = "stable",
+                directml_frame_scan_mode: str = "cpu_ssim") -> None:
         perf_total_start = time.perf_counter()
         step1_start = perf_total_start
         conf_threshold_ratio = conf_threshold / 100
@@ -157,6 +423,32 @@ class Video:
         temp_dir = utils.create_clean_temp_dir()
 
         try:
+            ffmpeg_mode = str(directml_frame_scan_mode or "cpu_ssim").strip().lower() == "ffmpeg_d3d11va"
+            if ocr_engine == "easyocr_directml" and ffmpeg_mode:
+                preset = str(directml_performance_preset or "balanced").strip().lower()
+                preset_sizes = {
+                    "compatibility": (1600, 1600),
+                    "balanced": (2400, 2400),
+                    "max": (4096, 4096),
+                }
+                if preset in preset_sizes:
+                    ffmpeg_grid_w, ffmpeg_grid_h = preset_sizes[preset]
+                else:
+                    try:
+                        ffmpeg_grid_w = max(512, int(directml_grid_max_width or 2400))
+                        ffmpeg_grid_h = max(512, int(directml_grid_max_height or 2400))
+                    except Exception:
+                        ffmpeg_grid_w, ffmpeg_grid_h = 2400, 2400
+
+                used_ffmpeg_hw_path = self._run_easyocr_directml_ffmpeg_hw_scan(
+                    temp_dir, target_end_str, ssim_threshold_ratio, subtitle_position,
+                    brightness_threshold, frames_to_skip, ffmpeg_grid_w, ffmpeg_grid_h,
+                    directml_recognition_mode, use_gpu, ocr_engine, conf_threshold_ratio,
+                    lang, normalize_to_simplified_chinese, step1_start, perf_total_start
+                )
+                if used_ffmpeg_hw_path:
+                    return
+
             raw_queue: queue.Queue[Any] = queue.Queue(maxsize=100)
             processed_queue: queue.Queue[Any] = queue.Queue(maxsize=100)
             write_queue: queue.Queue[Any] = queue.Queue(maxsize=200)
@@ -366,17 +658,28 @@ class Video:
             MAX_STITCH_HEIGHT = DEFAULT_STITCH_HEIGHT
 
             if ocr_engine == "easyocr_directml":
-                try:
-                    MAX_STITCH_WIDTH = max(512, int(directml_grid_max_width or 2400))
-                    MAX_STITCH_HEIGHT = max(512, int(directml_grid_max_height or 2400))
-                except Exception:
-                    MAX_STITCH_WIDTH = 2400
-                    MAX_STITCH_HEIGHT = 2400
+                preset = str(directml_performance_preset or "balanced").strip().lower()
+                preset_sizes = {
+                    "compatibility": (1600, 1600),
+                    "balanced": (2400, 2400),
+                    "max": (4096, 4096),
+                }
+                if preset in preset_sizes:
+                    MAX_STITCH_WIDTH, MAX_STITCH_HEIGHT = preset_sizes[preset]
+                else:
+                    try:
+                        MAX_STITCH_WIDTH = max(512, int(directml_grid_max_width or 2400))
+                        MAX_STITCH_HEIGHT = max(512, int(directml_grid_max_height or 2400))
+                    except Exception:
+                        MAX_STITCH_WIDTH = 2400
+                        MAX_STITCH_HEIGHT = 2400
 
             GRID_SPACING = 10
             FILENAME_ZERO_PADDING = 8
 
             if ocr_engine == "easyocr_directml":
+                print(f"DirectML performance preset: {directml_performance_preset}", flush=True)
+                print(f"DirectML recognition mode: {directml_recognition_mode}", flush=True)
                 print(f"DirectML stitched grid target: {MAX_STITCH_WIDTH}x{MAX_STITCH_HEIGHT}px", flush=True)
 
             batch_limits: dict[int, int] = {}
@@ -397,6 +700,27 @@ class Video:
             det_batches: dict[int, list[Any]] = {0: [], 1: []}
 
             prev_samples = [None] * len(self.validated_zones) if self.validated_zones else [None]
+            dml_frame_filter = None
+            dml_frame_filter_failed = False
+            dml_frame_scan_mode_normalized = str(directml_frame_scan_mode or "cpu_ssim").strip().lower()
+            if ocr_engine == "easyocr_directml" and dml_frame_scan_mode_normalized == "directml_ssim" and ssim_threshold_ratio < 1:
+                try:
+                    requested_index = os.environ.get("VIDEOCR_DIRECTML_DEVICE_INDEX", "").strip()
+                    device_index = int(requested_index) if requested_index else None
+                    from .directml_frame_filter import DirectMLFrameSimilarityFilter
+                    dml_frame_filter = DirectMLFrameSimilarityFilter(ssim_threshold_ratio, device_index=device_index)
+                    print(
+                        f"Step 1 frame scan mode: AMD DirectML SSIM on adapter {dml_frame_filter.device_label} "
+                        "(experimental; video decode/crop still uses PyAV/CPU).",
+                        flush=True
+                    )
+                except Exception as e:
+                    dml_frame_filter = None
+                    dml_frame_filter_failed = True
+                    print(f"Warning: DirectML frame scan could not start, falling back to CPU SSIM: {e}", flush=True)
+            elif ocr_engine == "easyocr_directml":
+                print("Step 1 frame scan mode: CPU SSIM (compatible).", flush=True)
+
             expected_index = None
             success = False
 
@@ -443,10 +767,27 @@ class Video:
 
                                     if ssim_threshold_ratio < 1:
                                         if prev_samples[zone_idx] is not None:
-                                            score = fast_ssim.ssim(prev_samples[zone_idx], sample, data_range=255)
-                                            if score > ssim_threshold_ratio:
-                                                prev_samples[zone_idx] = sample
-                                                continue
+                                            if dml_frame_filter is not None:
+                                                try:
+                                                    if dml_frame_filter.is_similar(prev_samples[zone_idx], sample):
+                                                        prev_samples[zone_idx] = sample
+                                                        continue
+                                                except Exception as e:
+                                                    # Do not kill the whole OCR job if the experimental GPU frame scan hits
+                                                    # a DirectML operator/runtime issue. Fall back to the known-good CPU path.
+                                                    if not dml_frame_filter_failed:
+                                                        print(f"Warning: DirectML frame scan failed during processing; falling back to CPU SSIM: {e}", flush=True)
+                                                    dml_frame_filter = None
+                                                    dml_frame_filter_failed = True
+                                                    score = fast_ssim.ssim(prev_samples[zone_idx], sample, data_range=255)
+                                                    if score > ssim_threshold_ratio:
+                                                        prev_samples[zone_idx] = sample
+                                                        continue
+                                            else:
+                                                score = fast_ssim.ssim(prev_samples[zone_idx], sample, data_range=255)
+                                                if score > ssim_threshold_ratio:
+                                                    prev_samples[zone_idx] = sample
+                                                    continue
                                         prev_samples[zone_idx] = sample
 
                                     det_batches[zone_idx].append({
@@ -520,6 +861,13 @@ class Video:
 
             step1_end = time.perf_counter()
 
+            if dml_frame_filter is not None:
+                print(
+                    f"[Perf] DirectML frame scan comparisons: {dml_frame_filter.comparisons}, "
+                    f"filtered: {dml_frame_filter.filtered}",
+                    flush=True
+                )
+
             if len(self.frame_timestamps) > 1:
                 min_idx = min(self.frame_timestamps.keys())
                 max_idx = max(self.frame_timestamps.keys())
@@ -555,7 +903,8 @@ class Video:
                     det_stitched_dir,
                     det_stitch_map,
                     self.lang,
-                    use_gpu
+                    use_gpu,
+                    directml_recognition_mode
                 )
                 directml_ocr_end = time.perf_counter()
 

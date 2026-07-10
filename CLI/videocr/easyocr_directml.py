@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
 from typing import Any
 
@@ -50,6 +52,142 @@ def normalize_easyocr_lang(lang: str) -> list[str]:
     )
 
 
+
+def _windows_video_adapters() -> list[dict[str, Any]]:
+    """Return Windows video-controller names/RAM in likely DirectML order.
+
+    This is best-effort only. It helps Auto mode prefer a discrete/high-VRAM
+    Radeon GPU instead of a Ryzen iGPU when torch-directml exposes multiple
+    adapters but not friendly adapter names.
+    """
+    if sys.platform != "win32":
+        return []
+
+    ps_cmd = [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Json -Compress",
+    ]
+    try:
+        result = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=5)
+        payload = (result.stdout or "").strip()
+        if payload:
+            data = json.loads(payload)
+            if isinstance(data, dict):
+                data = [data]
+            adapters: list[dict[str, Any]] = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("Name") or "").strip()
+                ram_raw = item.get("AdapterRAM") or 0
+                try:
+                    ram = int(ram_raw)
+                except Exception:
+                    ram = 0
+                if name:
+                    adapters.append({"name": name, "ram": ram})
+            if adapters:
+                return adapters
+    except Exception:
+        pass
+
+    wmic_cmd = ["wmic", "path", "win32_VideoController", "get", "name,adapterram"]
+    try:
+        result = subprocess.run(wmic_cmd, capture_output=True, text=True, timeout=5)
+        adapters = []
+        for raw in (result.stdout or "").splitlines()[1:]:
+            line = " ".join(raw.split())
+            if not line:
+                continue
+            parts = line.split(" ", 1)
+            ram = 0
+            name = line
+            if parts and parts[0].isdigit():
+                try:
+                    ram = int(parts[0])
+                except Exception:
+                    ram = 0
+                name = parts[1] if len(parts) > 1 else "Unknown GPU"
+            adapters.append({"name": name.strip(), "ram": ram})
+        return adapters
+    except Exception:
+        return []
+
+
+def _score_video_adapter(adapter: dict[str, Any]) -> int:
+    """Score adapters so Auto mode prefers the fastest discrete AMD card."""
+    name = str(adapter.get("name") or "").lower()
+    ram = int(adapter.get("ram") or 0)
+    score = ram // (256 * 1024 * 1024)
+
+    # Prefer discrete/high-performance cards. Keep NVIDIA/Intel Arc positive too
+    # because DirectML is vendor-neutral, while still strongly favoring AMD/Radeon.
+    if "radeon rx" in name or "rx " in name:
+        score += 1000
+    elif "radeon" in name or "amd" in name:
+        score += 600
+    elif "geforce" in name or "nvidia" in name or "rtx" in name:
+        score += 500
+    elif "arc" in name:
+        score += 350
+
+    # Common integrated-GPU names should not win unless they are the only adapter.
+    if "integrated" in name or "radeon(tm) graphics" in name or "graphics" == name.strip():
+        score -= 400
+    if "microsoft basic" in name or "remote" in name:
+        score -= 1000
+    return score
+
+
+def _preferred_high_performance_adapter_index() -> int | None:
+    adapters = _windows_video_adapters()
+    if not adapters:
+        return None
+    scored = [(idx, _score_video_adapter(adapter), adapter) for idx, adapter in enumerate(adapters)]
+    scored.sort(key=lambda item: item[1], reverse=True)
+    best_idx, best_score, _ = scored[0]
+    if best_score <= -500:
+        return None
+    return int(best_idx)
+
+
+def get_directml_recognition_mode() -> str:
+    """Return DirectML recognition strategy.
+
+    stable: detector on DirectML, recognizer on CPU. Safest.
+    auto: try GPU recognition, fall back to CPU if DirectML lacks an op.
+    experimental: force GPU recognition attempt, still falls back on known LSTM failure.
+    """
+    mode = os.environ.get("VIDEOCR_DIRECTML_RECOGNITION_MODE", "stable").strip().lower()
+    aliases = {
+        "cpu": "stable",
+        "hybrid": "stable",
+        "safe": "stable",
+        "dml": "experimental",
+        "gpu": "experimental",
+        "full": "experimental",
+    }
+    mode = aliases.get(mode, mode)
+    if mode not in {"stable", "auto", "experimental"}:
+        mode = "stable"
+    return mode
+
+
+def _is_lstm_directml_failure(e: BaseException) -> bool:
+    text = _format_exception(e).lower()
+    needles = (
+        "_thnn_fused_lstm_cell",
+        "lstm",
+        "not currently supported on the dml backend",
+        "could not run 'aten::",
+    )
+    return any(n in text for n in needles)
+
+
 def _safe_directml_device_count(torch_directml: Any) -> int | None:
     """Return the DirectML adapter count when the installed torch-directml exposes it."""
     for name in ("device_count", "get_device_count"):
@@ -85,10 +223,17 @@ def _build_directml_candidate_indices(torch_directml: Any) -> list[int | None]:
                 "  set VIDEOCR_DIRECTML_DEVICE_INDEX=1"
             )
 
+    prefer_high_perf = os.environ.get("VIDEOCR_DIRECTML_AUTO_PREFER_HIGH_PERFORMANCE", "1").strip().lower() not in {"0", "false", "no", "off"}
+    preferred = _preferred_high_performance_adapter_index() if prefer_high_perf else None
+    if preferred is not None:
+        candidates.append(preferred)
+
     count = _safe_directml_device_count(torch_directml)
     if count is not None:
         # On systems like Ryzen 7800X3D + RX 7900 XTX, adapter 0 is commonly the
-        # integrated AMD Radeon Graphics and adapter 1 is the RX 7900 XTX.
+        # integrated AMD Radeon Graphics and adapter 1 is the RX 7900 XTX. Try
+        # the detected high-performance adapter first, then the common dGPU
+        # index, then all visible adapters.
         if count > 1:
             candidates.append(1)
         candidates.extend(range(count))
@@ -156,6 +301,25 @@ def _format_exception(e: BaseException) -> str:
     """Return a compact but useful chained exception traceback."""
     import traceback
     return "".join(traceback.format_exception(type(e), e, e.__traceback__)).strip()
+
+
+def _is_known_directml_recognition_failure(e: BaseException) -> bool:
+    """Return True for the known EasyOCR/torch-directml recognizer crash.
+
+    EasyOCR's recognition model uses a BiLSTM path. On the current Windows
+    torch-directml stack this may surface as an unsupported/fallback failure
+    around aten::_thnn_fused_lstm_cell. In that case v10.1 should retry in
+    Stable Hybrid mode instead of aborting the whole job.
+    """
+    text = _format_exception(e)
+    needles = (
+        "aten::_thnn_fused_lstm_cell",
+        "not currently supported on the DML backend",
+        "PrivateUse1",
+        "LSTM",
+        "lstm",
+    )
+    return any(needle in text for needle in needles)
 
 
 _DML_PATCH_APPLIED = False
@@ -232,18 +396,25 @@ def patch_easyocr_for_directml(easyocr_module: Any) -> None:
 
         model.load_state_dict(cleaned)
 
-        # Hybrid DirectML mode:
-        # EasyOCR's recognizer uses BiLSTM. On torch-directml 0.2.5 / torch 2.4.1,
-        # the LSTM path can fall back to a broken CPU operator path
-        # (aten::_thnn_fused_lstm_cell). Keep recognition on real CPU while the
-        # detector can still use DirectML. This avoids crashes and still gives
-        # AMD users a working GPU-assisted backend instead of a hard failure.
-        model = model.to("cpu")
+        recognition_mode = get_directml_recognition_mode()
+        if recognition_mode in {"auto", "experimental"}:
+            # Try to place EasyOCR's recognizer on DirectML as well. Some
+            # torch-directml/PyTorch versions still lack the BiLSTM op EasyOCR
+            # uses; run_easyocr_on_stitched_images will catch that known failure
+            # and recreate the reader in stable CPU-recognition mode.
+            model = model.to(device)
+            try:
+                model._videocr_directml_recognizer_experimental = True
+            except Exception:
+                pass
+        else:
+            # Stable hybrid mode: DirectML detector + CPU recognizer.
+            model = model.to("cpu")
+            try:
+                model._videocr_cpu_recognizer_for_directml = True
+            except Exception:
+                pass
         model.eval()
-        try:
-            model._videocr_cpu_recognizer_for_directml = True
-        except Exception:
-            pass
         return model, converter
 
     # Preserve originals once.
@@ -268,6 +439,12 @@ def patch_easyocr_for_directml(easyocr_module: Any) -> None:
         """
         current_device = getattr(self, "device", "cpu")
         if not _is_directml_device(current_device):
+            return _ORIG_RECOGNIZE(self, *args, **kwargs)
+
+        # Stable mode intentionally forces recognition to CPU. Auto and
+        # experimental mode try DirectML recognition first so newer DirectML/
+        # PyTorch stacks can use more of the GPU.
+        if get_directml_recognition_mode() in {"auto", "experimental"}:
             return _ORIG_RECOGNIZE(self, *args, **kwargs)
 
         old_device = current_device
@@ -314,8 +491,14 @@ def create_easyocr_reader(lang: str, use_gpu: bool) -> Any:
 
     if use_gpu:
         device = get_directml_device()
+        recognition_mode = get_directml_recognition_mode()
         print(f"Using EasyOCR DirectML device: {device}", flush=True)
-        print("Using hybrid mode: DirectML detector + CPU text recognizer.", flush=True)
+        if recognition_mode == "stable":
+            print("Using stable hybrid mode: DirectML detector + CPU text recognizer.", flush=True)
+        elif recognition_mode == "auto":
+            print("Using AMD Max Auto mode: trying DirectML detector + DirectML recognizer, with CPU fallback if needed.", flush=True)
+        else:
+            print("Using experimental DirectML recognizer mode. CPU fallback will be used for known LSTM compatibility failures.", flush=True)
         try:
             patch_easyocr_for_directml(easyocr)
             # quantize=False avoids CPU-only quantization paths; DirectML runs
@@ -353,14 +536,19 @@ def run_easyocr_on_stitched_images(
         input_dir: str,
         stitch_map: dict[str, list[dict[str, Any]]],
         lang: str,
-        use_gpu: bool) -> dict[tuple[int, int], list[Any]]:
+        use_gpu: bool,
+        directml_recognition_mode: str = "stable") -> dict[tuple[int, int], list[Any]]:
     """
     Run EasyOCR on VideOCR's already-filtered stitched image grids.
 
     Returns a map keyed by (frame_idx, zone_idx). Each value is compatible with
     PredictedFrames: [[box, (text, confidence)], ...].
     """
+    if use_gpu:
+        os.environ["VIDEOCR_DIRECTML_RECOGNITION_MODE"] = str(directml_recognition_mode or "stable")
+
     reader = create_easyocr_reader(lang, use_gpu)
+    dml_fallback_done = False
 
     filenames = sorted(
         f for f in os.listdir(input_dir)
@@ -376,7 +564,11 @@ def run_easyocr_on_stitched_images(
     engine_name = "EasyOCR DirectML hybrid" if use_gpu else "EasyOCR"
     print(f"Starting {engine_name}...", flush=True)
     if use_gpu:
-        print("DirectML hybrid note: detector runs on the selected AMD/DirectML adapter; EasyOCR text recognition stays on CPU for LSTM compatibility.", flush=True)
+        mode = get_directml_recognition_mode()
+        if mode == "stable":
+            print("DirectML hybrid note: detector runs on the selected AMD/DirectML adapter; EasyOCR text recognition stays on CPU for LSTM compatibility.", flush=True)
+        else:
+            print(f"DirectML recognition mode: {mode}. VideOCR will fall back to stable CPU recognition if the DirectML LSTM path is unsupported.", flush=True)
 
     for index, filename in enumerate(filenames, 1):
         image_path = os.path.join(input_dir, filename)
@@ -387,7 +579,31 @@ def run_easyocr_on_stitched_images(
         try:
             results = reader.readtext(image_path, detail=1, paragraph=False)
         except Exception as e:
-            raise RuntimeError(f"EasyOCR failed while reading {filename}:\n{_format_exception(e)}") from e
+            mode = get_directml_recognition_mode() if use_gpu else "cpu"
+            if (
+                use_gpu
+                and not dml_fallback_done
+                and mode in {"auto", "experimental"}
+                and _is_known_directml_recognition_failure(e)
+            ):
+                print(
+                    "\nDirectML recognizer hit the known EasyOCR LSTM compatibility issue. "
+                    "Falling back to Stable Hybrid mode: DirectML detector + CPU recognizer.",
+                    flush=True,
+                )
+                os.environ["VIDEOCR_DIRECTML_RECOGNITION_MODE"] = "stable"
+                dml_fallback_done = True
+                try:
+                    reader = create_easyocr_reader(lang, use_gpu)
+                    results = reader.readtext(image_path, detail=1, paragraph=False)
+                except Exception as retry_error:
+                    raise RuntimeError(
+                        f"EasyOCR failed while reading {filename} after DirectML recognition fallback:\n"
+                        f"Original DirectML recognition error:\n{_format_exception(e)}\n\n"
+                        f"Stable Hybrid retry error:\n{_format_exception(retry_error)}"
+                    ) from retry_error
+            else:
+                raise RuntimeError(f"EasyOCR failed while reading {filename}:\n{_format_exception(e)}") from e
 
         for item in results:
             if len(item) < 3:

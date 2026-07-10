@@ -362,6 +362,23 @@ Any CLI parameters listed below can be appended to the Docker command.
 
 ## Performance
 
+### AMD DirectML v12 frame-scan prototype
+
+This fork includes an experimental frame scan mode intended for AMD GPUs on Windows:
+
+```text
+AMD FFmpeg D3D11VA Decode + DirectML SSIM (prototype)
+```
+
+This mode asks FFmpeg to use D3D11VA hardware decode, then feeds the cropped subtitle area into the EasyOCR DirectML pipeline. It is best tested with a single subtitle crop area and FFmpeg available on PATH. For reliable use, keep DirectML Recognition Mode on `Stable Hybrid`; use `AMD Max Auto` only for experiments.
+
+A quick diagnostic is available:
+
+```bash
+python tools/benchmark_amd_decode.py "C:\path\to\video.mp4" --crop 1920:287:0:793 --scale 720:-2 --frames-to-skip 1 --seconds 60
+```
+
+
 Local OCR processing can be slow on CPU. Using a GPU is recommended when available.
 
 This fork provides three practical performance paths:
@@ -866,3 +883,40 @@ AMD DirectML fork changes include:
 - RX 7900 XTX development helper scripts
 - DirectML diagnostics
 - Hybrid EasyOCR mode for stable AMD GPU usage
+
+## AMD DirectML / Max GPU Support
+
+This fork adds experimental Windows AMD GPU acceleration through **EasyOCR + torch-directml**. It is intended for AMD Radeon GPUs such as the RX 7900 XTX, while still keeping CPU fallback paths for compatibility.
+
+Recommended 1080p anime settings:
+
+```text
+OCR Engine: EasyOCR DirectML (AMD GPU)
+DirectML GPU: your discrete Radeon card, e.g. GPU 1: AMD Radeon RX 7900 XTX
+AMD Performance Preset: Balanced or Max AMD GPU Load
+DirectML Recognition Mode: Stable Hybrid, or AMD Max Auto for testing
+Frames to Skip: 1–2
+Max OCR Image Width: 720–960
+Use Full Frame OCR: unchecked
+Crop: subtitle area only
+```
+
+CLI options added by this fork:
+
+```bat
+--ocr_engine easyocr_directml ^
+--directml_device_index 1 ^
+--directml_performance_preset max ^
+--directml_recognition_mode auto
+```
+
+`stable` recognition mode runs detection on DirectML and recognition on CPU for maximum compatibility. `auto` tries DirectML recognition first and falls back to CPU recognition if the EasyOCR LSTM path is unsupported by the installed DirectML stack.
+
+For diagnostics:
+
+```bat
+python tools\list_directml_adapters.py
+python tools\diagnose_easyocr_directml.py
+```
+
+See `README_AMD_DIRECTML.md` for full setup and troubleshooting notes.

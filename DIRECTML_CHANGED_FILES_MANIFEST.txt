@@ -1,19 +1,31 @@
-VideOCR AMD DirectML v9 changed files
+VideOCR AMD DirectML v12 changed files
 =====================================
 
-Changed from v8:
+Core:
 - VideOCR.py
-  - Adds a real DirectML GPU dropdown in Advanced Settings.
-  - Adds a Refresh button for rescanning Windows display adapters.
-  - Keeps the existing hidden numeric --directml_device_index CLI value synced.
-  - Keeps DirectML grid width/height tuning from v8.
-  - Autosaves DirectML grid settings.
-- README.md
-  - Documents the v9 DirectML GPU dropdown.
-- README_AMD_DIRECTML.md
-  - Documents the v9 DirectML GPU dropdown.
+- CLI/videocr_cli.py
+- CLI/videocr/api.py
+- CLI/videocr/video.py
+- CLI/videocr/pyav_adapter.py
+- CLI/videocr/easyocr_directml.py
+- CLI/videocr/directml_frame_filter.py
 
-Notes:
-- The dropdown is friendly GUI sugar over the same DirectML adapter index used by torch-directml.
-- On the user's Ryzen+iGPU + RX 7900 XTX desktop, GPU 1 should normally be the RX 7900 XTX.
-- Auto still falls back to the existing DirectML adapter candidate logic.
+Tools:
+- tools/test_directml.py
+- tools/diagnose_easyocr_directml.py
+- tools/setup_directml_dev.bat
+- tools/run_directml_cli_test.bat
+- tools/benchmark_amd_decode.py
+
+Docs:
+- README.md
+- README_AMD_DIRECTML.md
+- DIRECTML_CHANGED_FILES_MANIFEST.txt
+
+v12 additions:
+- New AMD Frame Scan Mode option: ffmpeg_d3d11va
+- GUI option: AMD FFmpeg D3D11VA Decode + DirectML SSIM (prototype)
+- CLI option: --directml_frame_scan_mode ffmpeg_d3d11va
+- Experimental FFmpeg D3D11VA hardware decode path for EasyOCR DirectML single-zone subtitle crops
+- Raw cropped frame streaming from FFmpeg into the existing stitched OCR grid pipeline
+- New diagnostic: tools/benchmark_amd_decode.py

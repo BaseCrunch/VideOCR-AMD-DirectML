@@ -119,8 +119,11 @@ def main() -> None:
     parser.add_argument('--min_subtitle_duration', type=restricted_float(min_val=0.0), default=0.2, help='Minimum subtitle duration in seconds (default: 0.2)')
     parser.add_argument('--ocr_image_max_width', type=restricted_int(min_val=1), default=720, help='Maximum image width used for OCR (default: 720)')
     parser.add_argument('--directml_device_index', type=restricted_int(min_val=0), default=None, help='DirectML adapter index for EasyOCR DirectML. On Ryzen+iGPU systems, 1 is often the discrete AMD GPU.')
-    parser.add_argument('--directml_grid_max_width', type=restricted_int(min_val=512), default=2400, help='Maximum stitched OCR grid width for EasyOCR DirectML (default: 2400)')
-    parser.add_argument('--directml_grid_max_height', type=restricted_int(min_val=512), default=2400, help='Maximum stitched OCR grid height for EasyOCR DirectML (default: 2400)')
+    parser.add_argument('--directml_grid_max_width', type=restricted_int(min_val=512), default=2400, help='Maximum stitched OCR grid width for EasyOCR DirectML manual mode (default: 2400)')
+    parser.add_argument('--directml_grid_max_height', type=restricted_int(min_val=512), default=2400, help='Maximum stitched OCR grid height for EasyOCR DirectML manual mode (default: 2400)')
+    parser.add_argument('--directml_performance_preset', type=str, choices=['compatibility', 'balanced', 'max', 'manual'], default='balanced', help='DirectML grid/performance preset for AMD GPUs (default: balanced)')
+    parser.add_argument('--directml_recognition_mode', type=str, choices=['stable', 'auto', 'experimental'], default='stable', help='DirectML recognition mode: stable=CPU recognizer, auto=try GPU recognizer with fallback, experimental=try GPU recognizer (default: stable)')
+    parser.add_argument('--directml_frame_scan_mode', type=str, choices=['cpu_ssim', 'directml_ssim', 'ffmpeg_d3d11va'], default='cpu_ssim', help='Step 1 frame scan mode. cpu_ssim is safest; directml_ssim moves SSIM-style comparisons to DirectML/AMD GPU; ffmpeg_d3d11va uses FFmpeg D3D11VA hardware decode prototype plus DirectML SSIM for EasyOCR DirectML.')
     parser.add_argument('--crop_x', type=int, default=None, help='(Zone 1) Crop start X')
     parser.add_argument('--crop_y', type=int, default=None, help='(Zone 1) Crop start Y')
     parser.add_argument('--crop_width', type=int, default=None, help='(Zone 1) Crop width')
@@ -146,6 +149,11 @@ def main() -> None:
             if args.directml_device_index is not None:
                 os.environ["VIDEOCR_DIRECTML_DEVICE_INDEX"] = str(args.directml_device_index)
                 print(f"DirectML adapter requested from CLI: {args.directml_device_index}", flush=True)
+            os.environ["VIDEOCR_DIRECTML_RECOGNITION_MODE"] = args.directml_recognition_mode
+            os.environ.setdefault("VIDEOCR_DIRECTML_AUTO_PREFER_HIGH_PERFORMANCE", "1")
+            print(f"DirectML performance preset: {args.directml_performance_preset}", flush=True)
+            print(f"DirectML recognition mode: {args.directml_recognition_mode}", flush=True)
+            print(f"DirectML frame scan mode: {args.directml_frame_scan_mode}", flush=True)
 
         if args.time_start and args.time_end:
             start_ms = utils.get_ms_from_time_str(args.time_start)
@@ -210,7 +218,10 @@ def main() -> None:
                 ocr_image_max_width=args.ocr_image_max_width,
                 subtitle_alignments=[args.subtitle_alignment, args.subtitle_alignment2],
                 directml_grid_max_width=args.directml_grid_max_width,
-                directml_grid_max_height=args.directml_grid_max_height
+                directml_grid_max_height=args.directml_grid_max_height,
+                directml_performance_preset=args.directml_performance_preset,
+                directml_recognition_mode=args.directml_recognition_mode,
+                directml_frame_scan_mode=args.directml_frame_scan_mode
             )
     except ValueError as e:
         print(f"Error: {e}")

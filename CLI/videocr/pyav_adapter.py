@@ -12,6 +12,7 @@ class VideoProperties(TypedDict):
     width: int
     duration_ms: int
     start_time_offset_ms: float
+    fps: float
 
 
 def get_video_properties(path: str) -> VideoProperties:
@@ -20,6 +21,7 @@ def get_video_properties(path: str) -> VideoProperties:
         'width': 0,
         'duration_ms': 0,
         'start_time_offset_ms': 0.0,
+        'fps': 0.0,
     }
 
     with av.open(path) as container:
@@ -34,6 +36,11 @@ def get_video_properties(path: str) -> VideoProperties:
 
         if container.start_time is not None:
             properties['start_time_offset_ms'] = container.start_time / 1000.0
+
+        if stream.average_rate is not None:
+            properties['fps'] = float(stream.average_rate)
+        elif stream.base_rate is not None:
+            properties['fps'] = float(stream.base_rate)
 
     return properties
 

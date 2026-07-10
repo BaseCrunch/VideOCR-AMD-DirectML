@@ -22,6 +22,7 @@ AMD / DirectX 12 GPU
 - Avoided the old NVIDIA `nvidia-smi` check when using EasyOCR DirectML
 - Added optional Python dependencies: `easyocr` and `torch-directml`
 - Added a `gpu-directml` build target in `build.py`
+- Added v10 AMD Max Support controls for GPU selection, performance presets, and recognition mode
 
 ## Important limitations
 
@@ -287,3 +288,145 @@ python CLI\videocr_cli.py ^
 ```
 
 The current DirectML backend is still hybrid: detection runs on the selected DirectML adapter, while recognition stays on CPU to avoid EasyOCR's unsupported LSTM path on `torch-directml`. Raising the grid size can reduce per-image overhead and keep the GPU busier, but it will not make the GPU run at 100% because recognition and subtitle merging are still CPU-side.
+
+## AMD Max Support / v10 notes
+
+This fork now includes extra DirectML controls intended to support more AMD GPU setups and to let users push their GPU harder when their driver and `torch-directml` stack can handle it.
+
+### DirectML GPU selection
+
+The GUI includes a DirectML GPU selector under Advanced Settings. On many Ryzen desktops:
+
+```text
+GPU 0 = integrated AMD Radeon(TM) Graphics
+GPU 1 = discrete AMD Radeon RX card
+```
+
+The CLI also supports:
+
+```bat
+--directml_device_index 1
+```
+
+Auto mode now tries to prefer the high-performance/discrete adapter by checking Windows video-controller names and adapter RAM before falling back to the older GPU 1 -> GPU 0 order.
+
+### AMD Performance Preset
+
+The GUI and CLI now support:
+
+```bat
+--directml_performance_preset compatibility
+--directml_performance_preset balanced
+--directml_performance_preset max
+--directml_performance_preset manual
+```
+
+Preset behavior:
+
+| Preset | Grid target | Intended use |
+|---|---:|---|
+| `compatibility` | 1600x1600 | Older/lower-VRAM GPUs, stability first |
+| `balanced` | 2400x2400 | Recommended default |
+| `max` | 4096x4096 | Larger batches to feed high-end AMD GPUs harder |
+| `manual` | Uses the grid width/height fields | Manual tuning |
+
+### DirectML Recognition Mode
+
+The GUI and CLI now support:
+
+```bat
+--directml_recognition_mode stable
+--directml_recognition_mode auto
+--directml_recognition_mode experimental
+```
+
+Mode behavior:
+
+| Mode | Detection | Recognition | Notes |
+|---|---|---|---|
+| `stable` | DirectML GPU | CPU | Safest; avoids EasyOCR LSTM DirectML crash |
+| `auto` | DirectML GPU | Try DirectML GPU, then CPU fallback | Best “max AMD” test mode |
+| `experimental` | DirectML GPU | Try DirectML GPU | Still falls back for known LSTM compatibility failures |
+
+Current known limitation: EasyOCR recognition uses a BiLSTM path. Some `torch-directml` versions cannot run that operator on DirectML reliably. `auto` mode tries the GPU recognizer first, then falls back to the stable CPU recognizer if the known LSTM failure appears.
+
+### New diagnostics
+
+```bat
+python tools\list_directml_adapters.py
+python tools\diagnose_easyocr_directml.py
+```
+
+These show detected Windows GPU adapters, the likely preferred high-performance adapter, the selected DirectML device, and whether the patched EasyOCR reader can start.
+
+
+## v10.1 Hotfix
+
+AMD Max Auto now catches the known EasyOCR / torch-directml LSTM recognition failure (`aten::_thnn_fused_lstm_cell`) and automatically retries the current OCR image in Stable Hybrid mode. This keeps DirectML text detection on the selected AMD GPU while moving text recognition back to CPU when required, instead of crashing the whole subtitle job.
+
+## v11 Experimental AMD Frame Scan Mode
+
+v11 adds an experimental Step 1 frame-scan mode for AMD/DirectML users:
+
+```bat
+--directml_frame_scan_mode cpu_ssim
+--directml_frame_scan_mode directml_ssim
+```
+
+| Mode | Frame similarity scan | Notes |
+|---|---|---|
+| `cpu_ssim` | CPU SSIM | Safest and most compatible |
+| `directml_ssim` | DirectML global SSIM-style comparison | Experimental; moves Step 1 similarity comparisons onto the selected AMD/DirectML adapter |
+
+Important limitation: PyAV still decodes video and performs crop/scale operations on the CPU. The new DirectML frame-scan mode offloads the per-frame similarity comparison after the crop/scale step. A true fully GPU-resident pipeline would require a larger rewrite around FFmpeg/D3D11VA/Direct3D textures or an ONNX/DirectML video preprocessing pipeline.
+
+Recommended experimental high-load AMD settings:
+
+```text
+DirectML GPU: GPU 1: AMD Radeon RX 7900 XTX
+AMD Performance Preset: Max AMD GPU Load
+DirectML Recognition Mode: Stable Hybrid or AMD Max Auto
+AMD Frame Scan Mode: AMD DirectML SSIM (experimental)
+Frames to Skip: 1 or 2
+Max OCR Image Width: 720 or 960
+Use Full Frame OCR: unchecked
+```
+
+## v12 Experimental AMD Hardware Decode / Frame Scan Prototype
+
+v12 adds a new frame scan mode for users who want to push more of the early video pipeline toward the AMD GPU:
+
+```text
+AMD FFmpeg D3D11VA Decode + DirectML SSIM (prototype)
+```
+
+This mode asks FFmpeg to use Windows D3D11VA hardware acceleration while decoding the video, then streams the cropped subtitle region into VideOCR's existing stitched OCR grid pipeline. When SSIM filtering is enabled, the similarity comparison is also attempted through DirectML on the selected adapter.
+
+Recommended v12 test settings for a Radeon RX 7900 XTX:
+
+```text
+OCR Engine: EasyOCR DirectML (AMD GPU)
+DirectML GPU: GPU 1: AMD Radeon RX 7900 XTX
+AMD Performance Preset: Max AMD GPU Load
+DirectML Recognition Mode: Stable Hybrid (recommended)
+AMD Frame Scan Mode: AMD FFmpeg D3D11VA Decode + DirectML SSIM (prototype)
+Frames to Skip: 1 or 2
+Max OCR Image Width: 720
+Use Full Frame OCR: unchecked
+```
+
+Important limitations:
+
+- FFmpeg must be installed and available on PATH.
+- The v12 hardware decode prototype currently supports the common single-zone subtitle crop workflow first.
+- The decoded/cropped frames still have to be copied back to CPU memory before EasyOCR can process the stitched images.
+- EasyOCR recognition may still use CPU fallback because the PyTorch DirectML LSTM recognizer can hit unsupported operator paths.
+- Higher GPU usage is not guaranteed if CPU-side image handling, Python overhead, or recognition remains the bottleneck.
+
+A helper benchmark is included:
+
+```bash
+python tools/benchmark_amd_decode.py "C:\path\to\video.mp4" --crop 1920:287:0:793 --scale 720:-2 --frames-to-skip 1 --seconds 60
+```
+
+Use this to check whether FFmpeg D3D11VA decode is working on your system before relying on the prototype mode for full episodes.

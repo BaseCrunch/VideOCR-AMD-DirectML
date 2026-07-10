@@ -259,6 +259,31 @@ CONFIG_FILE = get_config_file_path()
 CONFIG_SECTION = 'Settings'
 DIRECTML_AUTO_OPTION = "Auto (recommended)"
 DIRECTML_GPU_OPTION_PATTERN = re.compile(r"^GPU\s+(\d+)\s*:\s*(.*)$")
+DIRECTML_PERFORMANCE_PRESETS = [
+    ("Compatibility / Low VRAM", "compatibility"),
+    ("Balanced (recommended)", "balanced"),
+    ("Max AMD GPU Load", "max"),
+    ("Manual Grid Size", "manual"),
+]
+DIRECTML_PERFORMANCE_DISPLAY = [name for name, _ in DIRECTML_PERFORMANCE_PRESETS]
+DIRECTML_PERFORMANCE_TO_CLI = {name: value for name, value in DIRECTML_PERFORMANCE_PRESETS}
+DIRECTML_PERFORMANCE_FROM_CLI = {value: name for name, value in DIRECTML_PERFORMANCE_PRESETS}
+DIRECTML_RECOGNITION_MODES = [
+    ("Stable Hybrid (recommended)", "stable"),
+    ("AMD Max Auto (try GPU recognition + fallback)", "auto"),
+    ("Experimental Full DirectML", "experimental"),
+]
+DIRECTML_RECOGNITION_DISPLAY = [name for name, _ in DIRECTML_RECOGNITION_MODES]
+DIRECTML_RECOGNITION_TO_CLI = {name: value for name, value in DIRECTML_RECOGNITION_MODES}
+DIRECTML_RECOGNITION_FROM_CLI = {value: name for name, value in DIRECTML_RECOGNITION_MODES}
+DIRECTML_FRAME_SCAN_MODES = [
+    ("CPU SSIM (compatible)", "cpu_ssim"),
+    ("AMD DirectML SSIM (experimental)", "directml_ssim"),
+    ("AMD FFmpeg D3D11VA Decode + DirectML SSIM (prototype)", "ffmpeg_d3d11va"),
+]
+DIRECTML_FRAME_SCAN_DISPLAY = [name for name, _ in DIRECTML_FRAME_SCAN_MODES]
+DIRECTML_FRAME_SCAN_TO_CLI = {name: value for name, value in DIRECTML_FRAME_SCAN_MODES}
+DIRECTML_FRAME_SCAN_FROM_CLI = {value: name for name, value in DIRECTML_FRAME_SCAN_MODES}
 try:
     DEFAULT_DOCUMENTS_DIR = str(pathlib.Path.home() / "Documents")
 except Exception:
@@ -1218,6 +1243,49 @@ def directml_option_to_index(option: Any) -> str:
     return ""
 
 
+
+def directml_preset_to_cli(value: Any) -> str:
+    text = str(value or "").strip()
+    if text in DIRECTML_PERFORMANCE_TO_CLI:
+        return DIRECTML_PERFORMANCE_TO_CLI[text]
+    if text in DIRECTML_PERFORMANCE_FROM_CLI:
+        return text
+    return "balanced"
+
+
+def directml_preset_from_cli(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return DIRECTML_PERFORMANCE_FROM_CLI.get(text, "Balanced (recommended)")
+
+
+def directml_recognition_to_cli(value: Any) -> str:
+    text = str(value or "").strip()
+    if text in DIRECTML_RECOGNITION_TO_CLI:
+        return DIRECTML_RECOGNITION_TO_CLI[text]
+    if text in DIRECTML_RECOGNITION_FROM_CLI:
+        return text
+    return "stable"
+
+
+def directml_recognition_from_cli(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return DIRECTML_RECOGNITION_FROM_CLI.get(text, "Stable Hybrid (recommended)")
+
+
+def directml_frame_scan_to_cli(value: Any) -> str:
+    text = str(value or "").strip()
+    if text in DIRECTML_FRAME_SCAN_TO_CLI:
+        return DIRECTML_FRAME_SCAN_TO_CLI[text]
+    if text in DIRECTML_FRAME_SCAN_FROM_CLI:
+        return text
+    return "cpu_ssim"
+
+
+def directml_frame_scan_from_cli(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return DIRECTML_FRAME_SCAN_FROM_CLI.get(text, "CPU SSIM (compatible)")
+
+
 def directml_index_to_option(options: list[str], selected_index: Any) -> str:
     """Pick a DirectML combo display value from a stored numeric index."""
     selected = str(selected_index or "").strip()
@@ -1284,6 +1352,9 @@ def get_default_settings() -> dict[str, Any]:
     '--directml_device_index': '1',
     '--directml_grid_max_width': '2400',
     '--directml_grid_max_height': '2400',
+    '--directml_performance_preset': 'Balanced (recommended)',
+    '--directml_recognition_mode': 'Stable Hybrid (recommended)',
+    '--directml_frame_scan_mode': 'CPU SSIM (compatible)',
     '--frames_to_skip': str(DEFAULT_FRAMES_TO_SKIP),
     '--use_fullframe': False,
     '--use_gpu': True,
@@ -1420,6 +1491,8 @@ def load_settings(window: sg.Window) -> None:
                     ('--directml_device_index', 'input'),
                     ('--directml_grid_max_width', 'input'),
                     ('--directml_grid_max_height', 'input'),
+                    ('--directml_performance_preset', 'input'),
+                    ('--directml_recognition_mode', 'input'),
                     ('--frames_to_skip', 'input'),
                     ('--use_fullframe', 'checkbox'),
                     ('--use_gpu', 'checkbox'),
@@ -1957,7 +2030,13 @@ def get_processing_args(values: dict[str, Any], window: sg.Window) -> tuple[dict
         if key.startswith('--') and key not in ['--keyboard_seek_step', '--default_output_dir', '--save_in_video_dir', '--send_notification', '--save_crop_box', '--check_for_updates', '--language', '--use_dual_zone', '--subtitle_alignment', '--subtitle_alignment2']:
             stripped_key = key.lstrip('-')
             value = values.get(key)
-            if isinstance(value, bool):
+            if key == '--directml_performance_preset':
+                args[stripped_key] = directml_preset_to_cli(value)
+            elif key == '--directml_recognition_mode':
+                args[stripped_key] = directml_recognition_to_cli(value)
+            elif key == '--directml_frame_scan_mode':
+                args[stripped_key] = directml_frame_scan_to_cli(value)
+            elif isinstance(value, bool):
                 args[stripped_key] = value
             elif value is not None and str(value).strip() != '':
                 args[stripped_key] = str(value).strip()
@@ -2633,6 +2712,12 @@ tab2_content = [
      sg.Button("Refresh", key="-BTN-DML-REFRESH-"),
      sg.Input('1', key="--directml_device_index", visible=False, enable_events=True)],
     [sg.Text("", key="-DML_ADAPTER_STATUS-", size=(80, 1), text_color="#b8b8b8")],
+    [sg.Text("AMD Performance Preset:", size=(38, 1), key='-LBL-DML_PRESET-'),
+     sg.Combo(DIRECTML_PERFORMANCE_DISPLAY, default_value="Balanced (recommended)", key="--directml_performance_preset", size=(42, 1), readonly=True, enable_events=True)],
+    [sg.Text("DirectML Recognition Mode:", size=(38, 1), key='-LBL-DML_RECOGNITION-'),
+     sg.Combo(DIRECTML_RECOGNITION_DISPLAY, default_value="Stable Hybrid (recommended)", key="--directml_recognition_mode", size=(42, 1), readonly=True, enable_events=True)],
+    [sg.Text("AMD Frame Scan Mode:", size=(38, 1), key='-LBL-DML_FRAME_SCAN-'),
+     sg.Combo(DIRECTML_FRAME_SCAN_DISPLAY, default_value="CPU SSIM (compatible)", key="--directml_frame_scan_mode", size=(42, 1), readonly=True, enable_events=True)],
     [sg.Text("DirectML Grid Max Width:", size=(38, 1), key='-LBL-DML_GRID_W-'),
      sg.Input('2400', key="--directml_grid_max_width", size=(10, 1), enable_events=True)],
     [sg.Text("DirectML Grid Max Height:", size=(38, 1), key='-LBL-DML_GRID_H-'),
@@ -3054,6 +3139,8 @@ KEYS_TO_AUTOSAVE = [
     '--ocr_image_max_width',
     '--directml_grid_max_width',
     '--directml_grid_max_height',
+    '--directml_performance_preset',
+    '--directml_recognition_mode',
     '--frames_to_skip',
     '--use_fullframe',
     '--use_gpu',
@@ -3198,6 +3285,26 @@ while True:
             refresh_directml_adapter_combo(window, values.get('--directml_device_index', ''))
             refreshed_values = window.read(timeout=0)[1]
             save_settings(window, refreshed_values)
+
+        elif event == '--directml_performance_preset':
+            preset = directml_preset_to_cli(values.get('--directml_performance_preset', 'balanced'))
+            if preset == 'compatibility':
+                window['--directml_grid_max_width'].update('1600')
+                window['--directml_grid_max_height'].update('1600')
+            elif preset == 'balanced':
+                window['--directml_grid_max_width'].update('2400')
+                window['--directml_grid_max_height'].update('2400')
+            elif preset == 'max':
+                window['--directml_grid_max_width'].update('4096')
+                window['--directml_grid_max_height'].update('4096')
+            refreshed_values = window.read(timeout=0)[1]
+            save_settings(window, refreshed_values)
+
+        elif event == '--directml_recognition_mode':
+            save_settings(window, values)
+
+        elif event == '--directml_frame_scan_mode':
+            save_settings(window, values)
 
         # --- Handle possible output path change ---
         if event == '--save_in_video_dir':
