@@ -920,3 +920,14 @@ python tools\diagnose_easyocr_directml.py
 ```
 
 See `README_AMD_DIRECTML.md` for full setup and troubleshooting notes.
+
+## AMD DirectML v13 note
+
+This fork includes an experimental AMD path for Windows Radeon GPUs:
+
+- EasyOCR DirectML Hybrid
+- FFmpeg D3D11VA frame scan prototype
+- ONNX Runtime DirectML OCR experimental engine
+- GUI Last Run Benchmark panel
+
+The ONNX engine is experimental and safely falls back to EasyOCR DirectML Hybrid if the ONNX Runtime DirectML stack is unavailable.

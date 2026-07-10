@@ -1,4 +1,4 @@
-VideOCR AMD DirectML v12 changed files
+VideOCR AMD DirectML v13 changed files
 =====================================
 
 Core:
@@ -6,9 +6,9 @@ Core:
 - CLI/videocr_cli.py
 - CLI/videocr/api.py
 - CLI/videocr/video.py
-- CLI/videocr/pyav_adapter.py
 - CLI/videocr/easyocr_directml.py
 - CLI/videocr/directml_frame_filter.py
+- CLI/videocr/onnx_directml_ocr.py
 
 Tools:
 - tools/test_directml.py
@@ -16,16 +16,20 @@ Tools:
 - tools/setup_directml_dev.bat
 - tools/run_directml_cli_test.bat
 - tools/benchmark_amd_decode.py
+- tools/list_directml_adapters.py
 
-Docs:
+Docs/config:
+- pyproject.toml
 - README.md
 - README_AMD_DIRECTML.md
 - DIRECTML_CHANGED_FILES_MANIFEST.txt
 
-v12 additions:
-- New AMD Frame Scan Mode option: ffmpeg_d3d11va
-- GUI option: AMD FFmpeg D3D11VA Decode + DirectML SSIM (prototype)
-- CLI option: --directml_frame_scan_mode ffmpeg_d3d11va
-- Experimental FFmpeg D3D11VA hardware decode path for EasyOCR DirectML single-zone subtitle crops
-- Raw cropped frame streaming from FFmpeg into the existing stitched OCR grid pipeline
-- New diagnostic: tools/benchmark_amd_decode.py
+v13 additions:
+- New OCR engine option: ONNX Runtime DirectML (AMD GPU Experimental)
+- New CLI engine value: --ocr_engine onnx_directml
+- Optional ONNX dependencies in the DirectML extra: onnxruntime-directml and rapidocr-onnxruntime
+- New backend file: CLI/videocr/onnx_directml_ocr.py
+- ONNX backend tries RapidOCR + ONNX Runtime DmlExecutionProvider first
+- If ONNX DirectML is unavailable or fails, it falls back to the working EasyOCR DirectML Hybrid backend instead of crashing
+- Added GUI Last Run Benchmark panel
+- Added [Perf] and [Bench] summary lines for Step 3, end-to-end runtime, and speed vs real-time

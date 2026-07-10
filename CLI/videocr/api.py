@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 
 from . import utils
 from .video import Video
@@ -16,6 +17,8 @@ def save_subtitles_to_file(
         directml_grid_max_width: int = 2400, directml_grid_max_height: int = 2400,
         directml_performance_preset: str = "balanced", directml_recognition_mode: str = "stable",
         directml_frame_scan_mode: str = "cpu_ssim") -> None:
+
+    total_start = time.perf_counter()
 
     if crop_zones is None:
         crop_zones = []
@@ -53,6 +56,7 @@ def save_subtitles_to_file(
 
     v = Video(video_path, paddleocr_path, det_model_dir, rec_model_dir, cls_model_dir, google_lens_path)
     try:
+        ocr_start = time.perf_counter()
         v.run_ocr(
             use_gpu, ocr_engine, lang, use_angle_cls, time_start, time_end, conf_threshold,
             use_fullframe, brightness_threshold, ssim_threshold, subtitle_position,
@@ -60,10 +64,28 @@ def save_subtitles_to_file(
             directml_grid_max_width, directml_grid_max_height,
             directml_performance_preset, directml_recognition_mode, directml_frame_scan_mode
         )
+        ocr_end = time.perf_counter()
     except Exception as e:
         print(f"Error: {e}", flush=True)
         sys.exit(1)
+    merge_start = time.perf_counter()
     subtitles = v.get_subtitles(sim_threshold, max_merge_gap_sec, lang, post_processing, min_subtitle_duration_sec, subtitle_alignments)
 
     with open(file_path, 'w+', encoding='utf-8') as f:
         f.write(subtitles)
+    total_end = time.perf_counter()
+
+    merge_write_sec = total_end - merge_start
+    ocr_runtime_sec = ocr_end - ocr_start
+    total_runtime_sec = total_end - total_start
+    print(f"[Perf] Step 3 subtitle merge/write: {merge_write_sec:.2f}s", flush=True)
+    print(f"[Perf] End-to-end runtime: {total_runtime_sec:.2f}s", flush=True)
+    if getattr(v, 'duration_ms', 0) and total_runtime_sec > 0:
+        video_sec = float(v.duration_ms) / 1000.0
+        speed_x = video_sec / total_runtime_sec
+        print(
+            f"[Bench] Video duration: {video_sec:.2f}s; OCR runtime: {ocr_runtime_sec:.2f}s; "
+            f"total runtime: {total_runtime_sec:.2f}s; speed: {speed_x:.2f}x real-time; "
+            f"engine: {ocr_engine}; frame scan: {directml_frame_scan_mode}; recognition: {directml_recognition_mode}",
+            flush=True,
+        )

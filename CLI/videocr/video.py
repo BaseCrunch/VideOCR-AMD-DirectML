@@ -267,20 +267,27 @@ class Video:
             print(f"[Perf] DirectML frame scan comparisons: {dml_frame_filter.comparisons}, filtered: {dml_frame_filter.filtered}", flush=True)
         print(f"[Perf] FFmpeg/D3D11VA sampled frames: {ocr_end}; kept for OCR: {kept_frames}; SSIM-skipped: {skipped_similar}", flush=True)
 
-        from .easyocr_directml import run_easyocr_on_stitched_images
+        if ocr_engine == "onnx_directml":
+            from .onnx_directml_ocr import run_onnx_directml_on_stitched_images
+            run_directml_ocr = run_onnx_directml_on_stitched_images
+            directml_label = "ONNX Runtime DirectML OCR"
+        else:
+            from .easyocr_directml import run_easyocr_on_stitched_images
+            run_directml_ocr = run_easyocr_on_stitched_images
+            directml_label = "EasyOCR DirectML hybrid OCR"
 
         total_stitched_frames = sum(len(mappings) for mappings in det_stitch_map.values())
         total_grids = len(det_stitch_map)
         avg_frames_per_grid = total_stitched_frames / total_grids if total_grids else 0.0
         print(
-            f"Running EasyOCR DirectML pass on {total_stitched_frames} filtered frame(s) "
+            f"Running {directml_label} pass on {total_stitched_frames} filtered frame(s) "
             f"stitched into {total_grids} image grid(s) "
             f"({avg_frames_per_grid:.1f} frame(s)/grid)...",
             flush=True
         )
 
         directml_ocr_start = time.perf_counter()
-        ocr_outputs = run_easyocr_on_stitched_images(
+        ocr_outputs = run_directml_ocr(
             det_stitched_dir,
             det_stitch_map,
             self.lang,
@@ -319,7 +326,7 @@ class Video:
 
         total_elapsed = time.perf_counter() - perf_total_start
         print(f"[Perf] Step 1 FFmpeg/D3D11VA decode/filter/stitch: {step1_end - step1_start:.2f}s", flush=True)
-        print(f"[Perf] Step 2 EasyOCR DirectML hybrid OCR: {directml_ocr_end - directml_ocr_start:.2f}s", flush=True)
+        print(f"[Perf] Step 2 {directml_label}: {directml_ocr_end - directml_ocr_start:.2f}s", flush=True)
         print(f"[Perf] Filtered OCR frames: {total_stitched_frames}; stitched grids: {total_grids}; average frames/grid: {avg_frames_per_grid:.1f}", flush=True)
         print(f"[Perf] Total OCR preparation/runtime before subtitle merge: {total_elapsed:.2f}s", flush=True)
         return True
@@ -424,7 +431,7 @@ class Video:
 
         try:
             ffmpeg_mode = str(directml_frame_scan_mode or "cpu_ssim").strip().lower() == "ffmpeg_d3d11va"
-            if ocr_engine == "easyocr_directml" and ffmpeg_mode:
+            if ocr_engine in ("easyocr_directml", "onnx_directml") and ffmpeg_mode:
                 preset = str(directml_performance_preset or "balanced").strip().lower()
                 preset_sizes = {
                     "compatibility": (1600, 1600),
@@ -657,7 +664,7 @@ class Video:
             MAX_STITCH_WIDTH = DEFAULT_STITCH_WIDTH
             MAX_STITCH_HEIGHT = DEFAULT_STITCH_HEIGHT
 
-            if ocr_engine == "easyocr_directml":
+            if ocr_engine in ("easyocr_directml", "onnx_directml"):
                 preset = str(directml_performance_preset or "balanced").strip().lower()
                 preset_sizes = {
                     "compatibility": (1600, 1600),
@@ -677,7 +684,7 @@ class Video:
             GRID_SPACING = 10
             FILENAME_ZERO_PADDING = 8
 
-            if ocr_engine == "easyocr_directml":
+            if ocr_engine in ("easyocr_directml", "onnx_directml"):
                 print(f"DirectML performance preset: {directml_performance_preset}", flush=True)
                 print(f"DirectML recognition mode: {directml_recognition_mode}", flush=True)
                 print(f"DirectML stitched grid target: {MAX_STITCH_WIDTH}x{MAX_STITCH_HEIGHT}px", flush=True)
@@ -703,7 +710,7 @@ class Video:
             dml_frame_filter = None
             dml_frame_filter_failed = False
             dml_frame_scan_mode_normalized = str(directml_frame_scan_mode or "cpu_ssim").strip().lower()
-            if ocr_engine == "easyocr_directml" and dml_frame_scan_mode_normalized == "directml_ssim" and ssim_threshold_ratio < 1:
+            if ocr_engine in ("easyocr_directml", "onnx_directml") and dml_frame_scan_mode_normalized == "directml_ssim" and ssim_threshold_ratio < 1:
                 try:
                     requested_index = os.environ.get("VIDEOCR_DIRECTML_DEVICE_INDEX", "").strip()
                     device_index = int(requested_index) if requested_index else None
@@ -718,7 +725,7 @@ class Video:
                     dml_frame_filter = None
                     dml_frame_filter_failed = True
                     print(f"Warning: DirectML frame scan could not start, falling back to CPU SSIM: {e}", flush=True)
-            elif ocr_engine == "easyocr_directml":
+            elif ocr_engine in ("easyocr_directml", "onnx_directml"):
                 print("Step 1 frame scan mode: CPU SSIM (compatible).", flush=True)
 
             expected_index = None
@@ -880,26 +887,31 @@ class Video:
                 print("[Perf] No frames survived OCR filtering. Nothing to recognize.", flush=True)
                 return
 
-            if ocr_engine == "easyocr_directml":
-                # EasyOCR DirectML handles detection and recognition in a single
-                # pass. It uses the same stitched frame grids prepared above,
-                # then maps every recognized line back into VideOCR's normal
-                # per-frame prediction model. This avoids any CUDA/PaddleOCR
-                # dependency for AMD GPUs on Windows.
-                from .easyocr_directml import run_easyocr_on_stitched_images
+            if ocr_engine in ("easyocr_directml", "onnx_directml"):
+                # DirectML backends handle detection and recognition in a single
+                # pass over the stitched frame grids, then map every recognized
+                # line back into VideOCR's normal per-frame prediction model.
+                if ocr_engine == "onnx_directml":
+                    from .onnx_directml_ocr import run_onnx_directml_on_stitched_images
+                    run_directml_ocr = run_onnx_directml_on_stitched_images
+                    directml_label = "ONNX Runtime DirectML OCR"
+                else:
+                    from .easyocr_directml import run_easyocr_on_stitched_images
+                    run_directml_ocr = run_easyocr_on_stitched_images
+                    directml_label = "EasyOCR DirectML hybrid OCR"
 
                 total_stitched_frames = sum(len(mappings) for mappings in det_stitch_map.values())
                 total_grids = len(det_stitch_map)
                 avg_frames_per_grid = total_stitched_frames / total_grids if total_grids else 0.0
                 print(
-                    f"Running EasyOCR DirectML pass on {total_stitched_frames} filtered frame(s) "
+                    f"Running {directml_label} pass on {total_stitched_frames} filtered frame(s) "
                     f"stitched into {total_grids} image grid(s) "
                     f"({avg_frames_per_grid:.1f} frame(s)/grid)...",
                     flush=True
                 )
 
                 directml_ocr_start = time.perf_counter()
-                ocr_outputs = run_easyocr_on_stitched_images(
+                ocr_outputs = run_directml_ocr(
                     det_stitched_dir,
                     det_stitch_map,
                     self.lang,
@@ -945,7 +957,7 @@ class Video:
 
                 total_elapsed = time.perf_counter() - perf_total_start
                 print(f"[Perf] Step 1 frame scan/filter/stitch: {step1_end - step1_start:.2f}s", flush=True)
-                print(f"[Perf] Step 2 EasyOCR DirectML hybrid OCR: {directml_ocr_end - directml_ocr_start:.2f}s", flush=True)
+                print(f"[Perf] Step 2 {directml_label}: {directml_ocr_end - directml_ocr_start:.2f}s", flush=True)
                 print(f"[Perf] Filtered OCR frames: {total_stitched_frames}; stitched grids: {total_grids}; average frames/grid: {avg_frames_per_grid:.1f}", flush=True)
                 print(f"[Perf] Total OCR preparation/runtime before subtitle merge: {total_elapsed:.2f}s", flush=True)
                 return

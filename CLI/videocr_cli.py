@@ -95,11 +95,11 @@ def valid_alignment_name(arg: str) -> str | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description='Extract subtitles from a video using PaddleOCR, Google Lens, or EasyOCR DirectML.')
+    parser = argparse.ArgumentParser(description='Extract subtitles from a video using PaddleOCR, Google Lens, EasyOCR DirectML, or ONNX Runtime DirectML.')
 
     parser.add_argument('--video_path', type=valid_video_path, required=True, help='Path to the video file')
     parser.add_argument('--output', type=valid_output_path, default='subtitle.srt', help='Output SRT file path (default: subtitle.srt)')
-    parser.add_argument('--ocr_engine', type=str, choices=['paddleocr', 'google_lens', 'easyocr_directml'], default='paddleocr', help='OCR engine to use. Use easyocr_directml for AMD/DirectML on Windows (default: paddleocr)')
+    parser.add_argument('--ocr_engine', type=str, choices=['paddleocr', 'google_lens', 'easyocr_directml', 'onnx_directml'], default='paddleocr', help='OCR engine to use. Use easyocr_directml or onnx_directml for AMD/DirectML on Windows (default: paddleocr)')
     parser.add_argument('--lang', type=str, default='en', help='OCR language code (default: en)')
     parser.add_argument('--time_start', type=valid_time_string, default='0:00', help='Start time (MM:SS or HH:MM:SS)')
     parser.add_argument('--time_end', type=valid_time_string, default='', help='End time (MM:SS or HH:MM:SS)')
@@ -143,8 +143,8 @@ def main() -> None:
             raise ValueError(f"Unsupported language code '{args.lang}' for PaddleOCR.")
         if args.ocr_engine == 'google_lens' and args.lang not in GOOGLE_LENS_LANGS:
             raise ValueError(f"Unsupported language code '{args.lang}' for Google Lens.")
-        if args.ocr_engine == 'easyocr_directml':
-            # EasyOCR language support is checked inside the DirectML backend so
+        if args.ocr_engine in ('easyocr_directml', 'onnx_directml'):
+            # DirectML backend language support is checked inside the backend so
             # custom mappings can be added without changing the CLI validator.
             if args.directml_device_index is not None:
                 os.environ["VIDEOCR_DIRECTML_DEVICE_INDEX"] = str(args.directml_device_index)

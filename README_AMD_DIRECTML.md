@@ -430,3 +430,28 @@ python tools/benchmark_amd_decode.py "C:\path\to\video.mp4" --crop 1920:287:0:79
 ```
 
 Use this to check whether FFmpeg D3D11VA decode is working on your system before relying on the prototype mode for full episodes.
+
+## v13 ONNX Runtime DirectML experimental OCR
+
+v13 adds a new experimental OCR engine:
+
+```text
+ONNX Runtime DirectML (AMD GPU Experimental)
+```
+
+CLI value:
+
+```bat
+--ocr_engine onnx_directml
+```
+
+This backend tries to use RapidOCR through ONNX Runtime with the DirectML provider. If the ONNX stack is not installed, does not expose `DmlExecutionProvider`, or fails during processing, VideOCR falls back to the working EasyOCR DirectML Hybrid path for that run so the subtitle job can still finish.
+
+The DirectML optional dependency group now includes:
+
+```text
+onnxruntime-directml
+rapidocr-onnxruntime
+```
+
+v13 also adds a GUI **Last Run Benchmark** panel. The CLI emits `[Perf]` and `[Bench]` lines with step timing, end-to-end runtime, and speed vs real-time.

@@ -438,7 +438,8 @@ EASY_TO_ISO_MAP = {
 OCR_ENGINES = [
     'PaddleOCR (Det. + Rec.)',
     'PaddleOCR (Det.) + Google Lens (Rec.)',
-    'EasyOCR DirectML (AMD GPU)'
+    'EasyOCR DirectML (AMD GPU)',
+    'ONNX Runtime DirectML (AMD GPU Experimental)'
 ]
 
 # Mapping from PaddleOCR internal codes to standard ISO 639 codes for deviating abbreviations
@@ -1472,7 +1473,7 @@ def load_settings(window: sg.Window) -> None:
 
                 if "Google Lens" in saved_engine:
                     active_lang_list = lens_display_names
-                elif "EasyOCR DirectML" in saved_engine:
+                elif "EasyOCR DirectML" in saved_engine or "ONNX Runtime DirectML" in saved_engine:
                     active_lang_list = easyocr_display_names
                 else:
                     active_lang_list = paddle_display_names
@@ -1493,6 +1494,7 @@ def load_settings(window: sg.Window) -> None:
                     ('--directml_grid_max_height', 'input'),
                     ('--directml_performance_preset', 'input'),
                     ('--directml_recognition_mode', 'input'),
+                    ('--directml_frame_scan_mode', 'input'),
                     ('--frames_to_skip', 'input'),
                     ('--use_fullframe', 'checkbox'),
                     ('--use_gpu', 'checkbox'),
@@ -1590,7 +1592,7 @@ def generate_output_path(video_path: str, values: dict[str, Any], default_dir: s
 
     if "Google Lens" in selected_engine_display:
         iso_code = lens_abbr_lookup.get(selected_lang_name, 'en')
-    elif "EasyOCR DirectML" in selected_engine_display:
+    elif "EasyOCR DirectML" in selected_engine_display or "ONNX Runtime DirectML" in selected_engine_display:
         easy_code = easyocr_abbr_lookup.get(selected_lang_name, 'en')
         iso_code = EASY_TO_ISO_MAP.get(easy_code, easy_code)
     else:
@@ -2010,6 +2012,9 @@ def get_processing_args(values: dict[str, Any], window: sg.Window) -> tuple[dict
     if "Google Lens" in selected_engine_display:
         args['ocr_engine'] = 'google_lens'
         lang_abbr = lens_abbr_lookup.get(values.get('-LANG_COMBO-', DEFAULT_SUBTITLE_LANGUAGE))
+    elif "ONNX Runtime DirectML" in selected_engine_display:
+        args['ocr_engine'] = 'onnx_directml'
+        lang_abbr = easyocr_abbr_lookup.get(values.get('-LANG_COMBO-', DEFAULT_SUBTITLE_LANGUAGE))
     elif "EasyOCR DirectML" in selected_engine_display:
         args['ocr_engine'] = 'easyocr_directml'
         lang_abbr = easyocr_abbr_lookup.get(values.get('-LANG_COMBO-', DEFAULT_SUBTITLE_LANGUAGE))
@@ -2122,10 +2127,13 @@ def run_videocr(args_dict: dict[str, Any], window: sg.Window) -> bool:
     STARTING_PADDLEOCR_PATTERN = re.compile(r"Starting PaddleOCR\.\.\.")
     STARTING_LENS_PATTERN = re.compile(r"Starting Google Lens CLI\.\.\.")
     STARTING_EASYOCR_PATTERN = re.compile(r"Starting EasyOCR(?: DirectML)?\.\.\.")
+    STARTING_ONNX_PATTERN = re.compile(r"Starting ONNX Runtime DirectML OCR")
     INFO_PASS_PATTERN = re.compile(r"Running Text-Detection-Only pass on (\d+) filtered frame\(s\) stitched into (\d+) image grid\(s\)\.\.\.")
     FILTERED_PATTERN = re.compile(r"Filtered out (\d+) redundant frame\(s\) via Text-Detection and tight-box SSIM analysis\.")
     GENERATING_SUBTITLES_PATTERN = re.compile(r"Generating subtitles\.\.\.")
     REACHED_END_TIME_PATTERN = re.compile(r"Reached end time\. Stopping\.")
+    PERF_PATTERN = re.compile(r"^\[Perf\]\s*(.+)$")
+    BENCH_PATTERN = re.compile(r"^\[Bench\]\s*(.+)$")
 
     last_reported_percentage_step1 = -1.0
     last_reported_percentage_step2 = -1.0
@@ -2170,6 +2178,14 @@ def run_videocr(args_dict: dict[str, Any], window: sg.Window) -> bool:
                 if process.poll() is not None and line == '':
                     break
                 line = line.rstrip('\r\n')
+
+                perf_match = PERF_PATTERN.search(line)
+                bench_match = BENCH_PATTERN.search(line)
+                if perf_match or bench_match:
+                    clean_line = line.strip()
+                    gui_queue.put(('-VIDEOCR_OUTPUT-', clean_line + '\n'))
+                    gui_queue.put(('-BENCHMARK-UPDATE-', clean_line))
+                    continue
 
                 if expecting_log_path:
                     log_path = line.strip()
@@ -2267,7 +2283,7 @@ def run_videocr(args_dict: dict[str, Any], window: sg.Window) -> bool:
                     gui_queue.put(('-VIDEOCR_OUTPUT-', LANG.get('cli_starting_lens', line) + '\n'))
                     gui_queue.put(('-PROGRESS-SMOOTH-', {'text': LANG.get('cli_starting_lens', line), 'percent': None}))
                     continue
-                if STARTING_EASYOCR_PATTERN.search(line):
+                if STARTING_EASYOCR_PATTERN.search(line) or STARTING_ONNX_PATTERN.search(line):
                     gui_queue.put(('-VIDEOCR_OUTPUT-', line.strip() + '\n'))
                     gui_queue.put(('-PROGRESS-SMOOTH-', {'text': line.strip(), 'percent': None}))
                     continue
@@ -2650,6 +2666,8 @@ tab1_content = [
         sg.Text("", key="-ETA-LINE-", size=(25, 1), justification='right')
     ],
     [sg.ProgressBar(100, orientation='h', size=(1, 20), key="-PROGRESS-BAR-", expand_x=True)],
+    [sg.Text("Last Run Benchmark:", key='-LBL-BENCHMARK-')],
+    [sg.Multiline(key="-BENCHMARK-BOX-", size=(None, 4), expand_x=True, autoscroll=True, reroute_stdout=False, reroute_stderr=False, write_only=True, disabled=True)],
     [sg.Text("Log:", key='-LBL-LOG-')],
     [sg.Multiline(key="-OUTPUT-", size=(None, 7), expand_x=True, autoscroll=True, reroute_stdout=False, reroute_stderr=False, write_only=True, disabled=True)],
     [sg.Push(),
@@ -3141,6 +3159,7 @@ KEYS_TO_AUTOSAVE = [
     '--directml_grid_max_height',
     '--directml_performance_preset',
     '--directml_recognition_mode',
+    '--directml_frame_scan_mode',
     '--frames_to_skip',
     '--use_fullframe',
     '--use_gpu',
@@ -3185,6 +3204,9 @@ while True:
 
                 if msg_event == '-PROCESS_STARTED-':
                     window._videocr_process_pid = msg_data
+                    window._videocr_benchmark_lines = []
+                    if '-BENCHMARK-BOX-' in window.AllKeysDict:
+                        window['-BENCHMARK-BOX-'].update('')
                     window['-BTN-RUN-'].update(disabled=True)
                     window['-BTN-CANCEL-'].update(disabled=False)
                     window['-BTN-BATCH-STOP-'].update(disabled=False)
@@ -3196,6 +3218,13 @@ while True:
                         window['-ETA-LINE-'].update(msg_data['eta'])
                     if msg_data.get('percent') is not None:
                         window['-PROGRESS-BAR-'].update(msg_data['percent'])
+
+                elif msg_event == '-BENCHMARK-UPDATE-':
+                    lines = getattr(window, '_videocr_benchmark_lines', [])
+                    lines.append(str(msg_data))
+                    window._videocr_benchmark_lines = lines[-12:]
+                    if '-BENCHMARK-BOX-' in window.AllKeysDict:
+                        window['-BENCHMARK-BOX-'].update('\n'.join(window._videocr_benchmark_lines) + '\n')
 
                 elif msg_event == '-VIDEOCR_OUTPUT-':
                     text_to_log = msg_data
@@ -3325,7 +3354,7 @@ while True:
 
                 if "Google Lens" in selected_engine_display:
                     iso_code = lens_abbr_lookup.get(selected_lang_name, 'en')
-                elif "EasyOCR DirectML" in selected_engine_display:
+                elif "EasyOCR DirectML" in selected_engine_display or "ONNX Runtime DirectML" in selected_engine_display:
                     easy_code = easyocr_abbr_lookup.get(selected_lang_name, 'en')
                     iso_code = EASY_TO_ISO_MAP.get(easy_code, easy_code)
                 else:
@@ -3374,7 +3403,7 @@ while True:
 
             if "Google Lens" in selected_engine:
                 new_values = lens_display_names
-            elif "EasyOCR DirectML" in selected_engine:
+            elif "EasyOCR DirectML" in selected_engine or "ONNX Runtime DirectML" in selected_engine:
                 new_values = easyocr_display_names
             else:
                 new_values = paddle_display_names
@@ -4318,6 +4347,10 @@ while True:
                     lookup = lens_abbr_lookup
                 elif saved_engine == 'easyocr_directml':
                     engine_display = OCR_ENGINES[2]
+                    active_lang_list = easyocr_display_names
+                    lookup = easyocr_abbr_lookup
+                elif saved_engine == 'onnx_directml':
+                    engine_display = OCR_ENGINES[3]
                     active_lang_list = easyocr_display_names
                     lookup = easyocr_abbr_lookup
                 else:
