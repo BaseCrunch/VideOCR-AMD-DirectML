@@ -1,10 +1,10 @@
-English | [中文](https://github.com/timminator/VideOCR/blob/master/README_ch.md)
+English | [中文](README_ch.md)
 
 <p align="center">
-<img src="https://github.com/timminator/VideOCR/blob/master/Pictures/VideOCR.png" alt="VideOCR Icon" width="128">
-  <h1 align="center">VideOCR</h1>
+<img src="Pictures/VideOCR.png" alt="VideOCR Icon" width="128">
+  <h1 align="center">VideOCR AMD DirectML Fork</h1>
   <p align="center">
-    Extract hardcoded subtitles from videos!
+    Extract hardcoded subtitles from videos with a simple GUI, 200+ languages, and experimental AMD DirectML GPU support.
     <br />
   </p>
 </p>
@@ -13,271 +13,832 @@ English | [中文](https://github.com/timminator/VideOCR/blob/master/README_ch.m
 
 ## ℹ About
 
-Extract hardcoded (burned-in) subtitles from videos via a simple-to-use GUI. VideOCR supports both 100% local processing utilizing the **[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)** engine, as well as a hybrid cloud-based approach using **Google Lens** for highly accurate text recognition. Everything can be easily configured via a few clicks.
+VideOCR extracts hardcoded / burned-in subtitles from videos and exports them as `.srt` subtitle files.
 
-This repository also provides a version of VideOCR that can be used from the command line in combination with the supported OCR engines.
+This fork adds an experimental **AMD GPU acceleration path for Windows** using:
 
-The latest release incorporates the newest version of PaddleOCR for local processing and introduces the new Google Lens hybrid mode.
+- **DirectML**
+- **torch-directml**
+- **EasyOCR**
+- **Hybrid OCR mode**
+
+It keeps the original VideOCR features while adding an AMD-friendly OCR backend for systems that do not have NVIDIA CUDA GPUs.
+
+Original VideOCR supports:
+
+- Local OCR with **[PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)**
+- Hybrid cloud recognition with **Google Lens**
+- GUI usage
+- CLI usage
+- 200+ OCR languages depending on selected OCR engine
+
+This fork additionally supports:
+
+- `easyocr_directml` OCR engine
+- AMD GPU text detection through DirectML
+- CPU-safe text recognition fallback for stability
+- DirectML adapter selection for systems with both integrated AMD graphics and a discrete AMD GPU
+
+## AMD DirectML Fork Status
+
+This fork has been tested on:
+
+- **Windows**
+- **AMD Radeon RX 7900 XTX**
+- **Python 3.12**
+- **torch-directml**
+- **EasyOCR 1.7.2**
+
+Current AMD backend:
+
+| Stage | Device |
+|---|---|
+| Video decoding / frame filtering | CPU |
+| Image preprocessing / stitching | CPU |
+| EasyOCR text detection | AMD GPU through DirectML |
+| EasyOCR text recognition | CPU fallback |
+| Subtitle merging / SRT generation | CPU |
+
+The recognition stage currently stays on CPU because EasyOCR's LSTM/CRNN recognizer can hit DirectML operator compatibility issues, such as:
+
+```text
+aten::_thnn_fused_lstm_cell
+```
+
+The hybrid mode is intentional. It avoids the crash while still using the AMD GPU for the text-detection part of the OCR pipeline.
+
+## Important Notes
+
+- The AMD DirectML path is **experimental**.
+- DirectML mode is currently intended for **Windows AMD GPUs**.
+- NVIDIA users should still use the normal CUDA builds.
+- CPU mode still works.
+- Google Lens mode still works where available.
+- EasyOCR may download model files the first time it runs.
+- Python **3.12** is recommended.
+- Python **3.13** is not recommended for this fork because `torch-directml` may not provide compatible wheels for it.
 
 ## Setup
 
-### Windows:
-You can either install it with the setup installer or you can just download a folder with all the required files including the executable and unzip it to your desired location.
+### Windows CPU / CUDA / Normal Use
 
-### Linux:
-Download the tarball archive from the releases page and unzip it to your desired location.
-Optionally you can add VideOCR to your App menus if you want to.
-For this step open a terminal where you unpacked the archive and run:
+You can either install VideOCR with the setup installer or download a folder containing the executable and required files, then unzip it to your desired location.
 
+### Windows AMD DirectML Development Setup
+
+Use this setup if you want to run the AMD DirectML fork directly from source.
+
+Open CMD in the repository folder and run:
+
+```bat
+py -3.12 -m venv .venv --upgrade-deps
+call .venv\Scripts\activate.bat
+
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e ".[directml]"
+python -m pip install --force-reinstall --no-cache-dir "sympy==1.13.3" "mpmath==1.3.0"
 ```
+
+If your PC has both integrated AMD graphics and a discrete AMD GPU, force the DirectML adapter.
+
+For RX 7900 XTX systems where the discrete GPU is adapter index `1`:
+
+```bat
+set VIDEOCR_DIRECTML_DEVICE_INDEX=1
+```
+
+Then test DirectML:
+
+```bat
+python tools\test_directml.py
+python tools\diagnose_easyocr_directml.py
+```
+
+Expected result:
+
+```text
+DirectML tensor test: 3.0
+DirectML device: privateuseone:1
+Reader OK
+All DirectML diagnostics passed.
+```
+
+Then start the GUI:
+
+```bat
+python VideOCR.py
+```
+
+You can also use the helper:
+
+```bat
+run_gui_directml_dev.bat
+```
+
+This helper sets:
+
+```bat
+set VIDEOCR_DIRECTML_DEVICE_INDEX=1
+```
+
+before launching the GUI.
+
+### Windows Graphics Preference
+
+If Windows still sends DirectML workloads to the integrated GPU, force Python to use the high-performance GPU:
+
+```text
+Windows Settings
+→ System
+→ Display
+→ Graphics
+→ Add desktop app
+→ Select:
+  .venv\Scripts\python.exe
+→ Options
+→ High performance
+→ AMD Radeon RX 7900 XTX
+```
+
+Then launch VideOCR again with:
+
+```bat
+set VIDEOCR_DIRECTML_DEVICE_INDEX=1
+python VideOCR.py
+```
+
+### Linux
+
+Download the tarball archive from the releases page and unzip it to your desired location.
+
+Optionally, you can add VideOCR to your app menus. Open a terminal where you unpacked the archive and run:
+
+```bash
 ./install_videocr.sh
 ```
-This will create a shortcut for VideOCR. You can remove it via:  
 
-```
+This creates a shortcut for VideOCR.
+
+You can remove it with:
+
+```bash
 ./uninstall_videocr.sh
 ```
 
-### Docker:
-The VideOCR CLI can also be entirely run within a Docker container.
+### Docker
 
-#### Requirements:
+The VideOCR CLI can also be run within a Docker container.
+
+#### Requirements
+
 - **[Docker](https://docs.docker.com/get-docker/)** installed on your system.
-- **For GPU acceleration:** An NVIDIA GPU with the **[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)** installed on your host machine.
+- **For CUDA GPU acceleration:** An NVIDIA GPU with the **[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)** installed on your host machine.
 
-#### Option A: Download from GitHub Container Registry (GHCR):
-Pre-built images are automatically generated and hosted on GitHub. You can pull them directly without needing to compile anything:
+> AMD DirectML mode is Windows/DirectML-based and is not currently supported through the Docker flow.
 
-- **CPU Version:**
-  ```bash
-  docker pull ghcr.io/timminator/videocr-cli-cpu:latest
-  ```
+#### Option A: Download from GitHub Container Registry
 
-- **GPU Version (CUDA 11.8 - Nvidia 10 Series graphics cards):**
-  ```bash
-  docker pull ghcr.io/timminator/videocr-cli-gpu-cuda11.8:latest
-  ```
+Pre-built images are automatically generated and hosted on GitHub.
 
-- **GPU Version (CUDA 12.9 - Nvidia 16 - 50 Series graphics cards):**
-  ```bash
-  docker pull ghcr.io/timminator/videocr-cli-gpu-cuda12.9:latest
-  ```
-
-#### Option B: Build Locally:
-If you prefer to build the image yourself from the source, clone the repository and use the provided Dockerfile. You can specify the hardware target using the BUILD_TARGET argument (cpu, gpu-cuda11.8, or gpu-cuda12.9).
+CPU version:
 
 ```bash
-# Example: Build the CUDA 12.9 GPU version locally
-docker build --build-arg BUILD_TARGET=gpu-cuda12.9 -t videocr-cli-gpu:latest .
+docker pull ghcr.io/timminator/videocr-cli-cpu:latest
+```
 
-# Example: Build the CPU version locally
+GPU version, CUDA 11.8 / NVIDIA 10 Series graphics cards:
+
+```bash
+docker pull ghcr.io/timminator/videocr-cli-gpu-cuda11.8:latest
+```
+
+GPU version, CUDA 12.9 / NVIDIA 16 - 50 Series graphics cards:
+
+```bash
+docker pull ghcr.io/timminator/videocr-cli-gpu-cuda12.9:latest
+```
+
+#### Option B: Build Locally
+
+Clone the repository and use the provided Dockerfile. You can specify the hardware target with `BUILD_TARGET`.
+
+Supported Docker build targets:
+
+```text
+cpu
+gpu-cuda11.8
+gpu-cuda12.9
+```
+
+Example CUDA 12.9 GPU build:
+
+```bash
+docker build --build-arg BUILD_TARGET=gpu-cuda12.9 -t videocr-cli-gpu:latest .
+```
+
+Example CPU build:
+
+```bash
 docker build --build-arg BUILD_TARGET=cpu -t videocr-cli-cpu:latest .
 ```
 
-## Usage
+## GUI Usage
 
-Import a video and seek through the video via the timeline. You can also use the right and left arrow keys. Then you can just draw a crop box over the right part of the video. Use click+drag to select. Afterwards you can start the subtitle extraction process via the "Run" Button.
+Import a video and seek through the video using the timeline. You can also use the left and right arrow keys.
 
-Further options can be configured in the "Advanced Settings" Tab. You can find more info about them in the parameters section available in the CLI version.
-![image](https://github.com/timminator/VideOCR/blob/master/Pictures/GUI.png)
+Draw a crop box over the subtitle area using click and drag. After selecting the subtitle area, start subtitle extraction with the **Run** button.
 
-## Usage (CLI version)
-  
-There is also a CLI version available. Unzip the archive to your desired location and open a terminal in there. Afterwards you can run the following command:
+For AMD DirectML mode, recommended GUI settings are:
 
-### Windows:
+```text
+OCR Engine: EasyOCR DirectML / AMD GPU
+GPU Usage: checked
+Full Frame: unchecked
+Crop Area: subtitle area only
+Language: English, or your subtitle language
 ```
+
+Recommended 1080p anime episode settings:
+
+```text
+Frames to Skip: 2
+OCR Image Max Width: 720
+SSIM Threshold: 92
+Confidence Threshold: 65–75
+Max Merge Gap: 0.1–0.3
+```
+
+If subtitles are missed, increase accuracy:
+
+```text
+Frames to Skip: 1
+OCR Image Max Width: 960
+```
+
+If processing is too slow, increase speed:
+
+```text
+Frames to Skip: 3
+OCR Image Max Width: 720
+```
+
+![GUI screenshot](Pictures/GUI.png)
+
+## CLI Usage
+
+There is also a CLI version available. Open a terminal in the VideOCR folder and run:
+
+### Windows
+
+```bat
 .\videocr-cli.exe -h
 ```
 
-### Linux:
+When running from source:
+
+```bat
+python CLI\videocr_cli.py -h
 ```
+
+### Linux
+
+```bash
 ./videocr-cli.bin -h
 ```
 
-### Example usage (Windows):
-```
+### Example Usage: Windows Executable
+
+```bat
 .\videocr-cli.exe --video_path "Path\to\your\video\example.mp4" --output "Path\to\your\desired\subtitle\location\example.srt" --lang en --time_start "18:40" --use_gpu true
 ```
-More info about the arguments can be found in the parameters section further down.
 
-### Example Usage (Docker):
-When running the Docker container, you must use Docker volumes (-v) to mount your local video folder into the container's /data directory so the application can read the video and save the .srt output.
+### Example Usage: AMD DirectML Source Mode
 
-- **GPU Example:**
-  ```bash
-  docker run --rm -it --gpus all \
-  -v /path/to/your/local/videos:/data \
-  ghcr.io/timminator/videocr-cli-gpu-cuda12.9:latest \
-  --video_path /data/my_video.mp4 \
-  --output /data/my_subtitle.srt \
-  --use_gpu true
-  ```
+```bat
+set VIDEOCR_DIRECTML_DEVICE_INDEX=1
 
-- **CPU Example:**
-  ```bash
-  docker run --rm -it \
-  -v /path/to/your/local/videos:/data \
-  ghcr.io/timminator/videocr-cli-cpu:latest \
-  --video_path /data/my_video.mp4 \
-  --output /data/my_subtitle.srt
-  ```
+python CLI\videocr_cli.py ^
+  --video_path "C:\Path\To\video.mp4" ^
+  --output "C:\Path\To\output.en.srt" ^
+  --ocr_engine easyocr_directml ^
+  --lang en ^
+  --use_gpu true ^
+  --use_fullframe false ^
+  --crop_x 36 ^
+  --crop_y 793 ^
+  --crop_width 1862 ^
+  --crop_height 273 ^
+  --frames_to_skip 2 ^
+  --ssim_threshold 92 ^
+  --ocr_image_max_width 720
+```
 
-Any of the CLI parameters listed in the parameters section can be appended to the end of the docker run command.
+### Example Usage: Docker
+
+When running the Docker container, use Docker volumes with `-v` to mount your local video folder into the container's `/data` directory.
+
+GPU example:
+
+```bash
+docker run --rm -it --gpus all \
+-v /path/to/your/local/videos:/data \
+ghcr.io/timminator/videocr-cli-gpu-cuda12.9:latest \
+--video_path /data/my_video.mp4 \
+--output /data/my_subtitle.srt \
+--use_gpu true
+```
+
+CPU example:
+
+```bash
+docker run --rm -it \
+-v /path/to/your/local/videos:/data \
+ghcr.io/timminator/videocr-cli-cpu:latest \
+--video_path /data/my_video.mp4 \
+--output /data/my_subtitle.srt
+```
+
+Any CLI parameters listed below can be appended to the Docker command.
 
 ## Performance
 
-Local OCR processing with PaddleOCR can be slow on a CPU. Using this in combination with a GPU is highly recommended.
+Local OCR processing can be slow on CPU. Using a GPU is recommended when available.
 
-Alternatively, using the google_lens engine offloads the heaviest part of the pipeline (text recognition) to the cloud. This makes it an excellent and fast choice for users without a powerful GPU, provided they have an active internet connection.
+This fork provides three practical performance paths:
+
+| Mode | Best For | Notes |
+|---|---|---|
+| `paddleocr` CPU | Compatibility | Fully local but can be slow |
+| `paddleocr` CUDA | NVIDIA GPUs | Fastest official local GPU path |
+| `google_lens` | Accuracy / cloud recognition | Requires internet |
+| `easyocr_directml` | AMD Windows GPUs | Experimental hybrid DirectML mode |
+
+### AMD DirectML Performance Notes
+
+GPU usage may appear lower than gaming or rendering workloads. This is normal.
+
+The AMD DirectML backend processes OCR in bursts:
+
+1. CPU reads and filters frames.
+2. CPU creates stitched OCR image grids.
+3. RX 7900 XTX performs text detection through DirectML.
+4. CPU performs text recognition for compatibility.
+5. CPU merges subtitle lines and writes the `.srt`.
+
+Because only part of the OCR pipeline runs on the GPU, GPU usage around `10–40%` can be normal. This does not mean the GPU is unused.
 
 ## Tips
 
-When cropping, leave a bit of buffer space above and below the text to ensure accurate readings, but also don't make the box to large.
+When cropping, leave a bit of buffer space above and below the subtitle text to improve detection, but do not make the crop box too large.
+
+A tight crop box around the subtitle area is usually much faster and more accurate than full-frame OCR.
 
 ### Quick Configuration Cheatsheet
 
-|| More Speed | More Accuracy | Notes
--|------------|---------------|--------
-Input Video Quality       | Use lower quality           | Use higher quality  | Performance impact of using higher resolution video can be reduced with cropping
-`frames_to_skip`          | Higher number               | Lower number        | For perfectly accurate timestamps this parameter needs to be set to 0.
-`SSIM threshold`          | Lower threshold             | Higher Threshold    | If the SSIM between consecutive frames exceeds this threshold, the frame is considered similar and skipped for OCR. A lower value can greatly reduce the number of images OCR needs to be performed on.
+| Option | More Speed | More Accuracy | Notes |
+|---|---|---|---|
+| Input video quality | Use lower quality | Use higher quality | Cropping reduces the performance cost of high resolution |
+| `frames_to_skip` | Higher number | Lower number | For perfectly accurate timestamps, set this to `0` |
+| `ssim_threshold` | Lower threshold | Higher threshold | Lower values reduce the number of images sent to OCR |
+| `ocr_image_max_width` | Lower value | Higher value | Lower values are faster; higher values help small text |
+| Crop area | Tighter crop | Slight buffer around text | Avoid full-frame OCR unless needed |
 
+## Command Line Parameters
 
-## Command Line Parameters (CLI version)
+### `video_path`
 
-- `video_path`
+Path to the video where subtitles should be extracted from.
 
-  Path for the video where subtitles should be extracted from.
+### `output`
 
-- `output`
+Path where the `.srt` subtitle file should be stored.
 
-  Path for the desired location where the .srt file should be stored.
+### `ocr_engine`
 
-- `ocr_engine`
+Select the OCR engine to use for text detection and recognition.
 
-  Select the OCR engine to use for text detection and recognition. Valid values are `paddleocr` (default) and `google_lens`. 
-  `paddleocr` uses 100% local processing for both text detection and recognition. 
-  `google_lens` uses hybrid processing where PaddleOCR handles the text detection locally and Google Lens handles the text recognition. Note: The `google_lens` mode requires an active internet connection.
+Valid values include:
 
-- `lang`
+```text
+paddleocr
+google_lens
+easyocr_directml
+```
 
-  The language of the subtitles. The supported languages and abbreviations depend on your selected `ocr_engine`.
-  - For `paddleocr`: See the [PaddleOCR docs](https://github.com/PaddlePaddle/PaddleOCR/blob/main/docs/version3.x/algorithm/PP-OCRv5/PP-OCRv5_multi_languages.en.md).
-  - For `google_lens`: See the [Google Lens docs](https://docs.cloud.google.com/vision/docs/languages).
+`paddleocr` uses local processing for both text detection and recognition.
 
-- `subtitle_position`
+`google_lens` uses hybrid processing where local detection is combined with Google Lens recognition. This mode requires an active internet connection.
 
-  Specifies the alignment of subtitles in the video and allows for better text recognition.
+`easyocr_directml` uses the AMD DirectML fork backend. In the current stable hybrid mode, EasyOCR text detection runs on DirectML / AMD GPU and recognition falls back to CPU.
 
-- `conf_threshold`
+### `lang`
 
-  Confidence threshold for word predictions. Words with lower confidence than this value will be discarded. The default value `75` is fine for most cases (PaddleOCR only).
+Language of the subtitles.
 
-  Make it closer to 0 if you get too few words in each line, or make it closer to 100 if there are too many excess words in each line.
+Supported languages depend on the selected OCR engine.
 
-- `sim_threshold`
+- For `paddleocr`: see the PaddleOCR documentation.
+- For `google_lens`: see the Google Lens / Vision language documentation.
+- For `easyocr_directml`: use EasyOCR-supported language codes, such as `en`.
 
-  Similarity threshold for subtitle lines. Subtitle lines with larger [Levenshtein](https://en.wikipedia.org/wiki/Levenshtein_distance) ratios than this threshold will be merged together. The default value `80` is fine for most cases.
+### `subtitle_position`
 
-  Make it closer to 0 if you get too many duplicated subtitle lines, or make it closer to 100 if you get too few subtitle lines.
+Specifies the alignment of subtitles in the video and allows for better text recognition.
 
-- `ssim_threshold`
+### `conf_threshold`
 
-  If the SSIM between consecutive frames exceeds this threshold, the frame is considered similar and discarded during initial frame filtering in Step 1. A lower value can greatly reduce the number of images OCR needs to be performed on. On relatively tight crop boxes around the subtitle area good results could be seen with this value all the way lowered to 85.
+Confidence threshold for word predictions. Words with lower confidence than this value are discarded.
 
-- `post_processing`
+Default value:
 
-  This parameter adds a post processing step to the subtitle detection. The detected text will be analyzed for missing spaces (as this is a common issue with PaddleOCR) and tries to insert them automatically. Currently only available for English, Spanish, Portuguese, German, Italian and French. For more info check out my [wordninja-enhanced](https://github.com/timminator/wordninja-enhanced) repository.
+```text
+75
+```
 
-- `max_merge_gap`
+Make it lower if you get too few words in each line.
 
-  Maximum allowed time gap (in seconds) between two subtitles to be considered for merging if they are similar. The default value 0.09 (i.e., 90 milliseconds) works well in most scenarios.
+Make it higher if there are too many extra words in each line.
 
-  Increase this value if you notice that the output SRT file contains several subtitles with the same text that should be merged into a single one and are wrongly split into multiple ones. This can happen if the PaddleOCR OCR engine is not able to detect any text for a short amount of time while the subtitle is displayed in the selected video.
+### `sim_threshold`
 
-- `time_start` and `time_end`
+Similarity threshold for subtitle lines. Subtitle lines with larger Levenshtein ratios than this threshold are merged together.
 
-  Extract subtitles from only a clip of the video. The subtitle timestamps are still calculated according to the full video length.
+Default value:
 
-- `use_fullframe`
+```text
+80
+```
 
-  By default, the specified cropped area is used for OCR or if a crop is not specified, then the bottom third of the frame will be used. By setting this value to `True` the entire frame will be used.
+Make it lower if there are too many duplicated subtitle lines.
 
-- `crop_x(2)`, `crop_y(2)`, `crop_width(2)`, `crop_height(2)`
+Make it higher if too few subtitle lines are being generated.
 
-  Specifies the bounding area(s) in pixels for the portion of the frame that will be used for OCR. See image below for example:
-  ![image](https://github.com/timminator/VideOCR/blob/master/Pictures/crop_example.png)
+### `ssim_threshold`
 
-- `subtitle_alignment(2)`
+If the SSIM between consecutive frames exceeds this threshold, the frame is considered similar and discarded during initial frame filtering in Step 1.
 
-  Subtitle alignment. This parameter allows you to control the position of the subtitles within the video frame using ASS (Advanced SubStation Alpha) tags. Valid values are: `bottom-left`, `bottom-center`, `bottom-right`, `middle-left`, `middle-center`, `middle-right`, `top-left`, `top-center`, `top-right`.
+A lower value can greatly reduce the number of images OCR needs to process.
 
-- `max_ocr_image_width`
+On tight subtitle crop boxes, good results may be possible around:
 
-  Downscales the cropped image frame so its width does not exceed this value before passing it to the OCR engine. A lower value shortens the processing time, but setting it too low can reduce OCR accuracy.
+```text
+85–92
+```
 
-- `use_gpu`
+### `post_processing`
 
-  Set to `True` if performing OCR with GPU.
+Adds a post-processing step for detected text. This can analyze detected text for missing spaces and insert them automatically.
 
-- `use_angle_cls`
+Currently available for:
 
-  Set to `True` if classification should be enabled (PaddleOCR only).
+```text
+English
+Spanish
+Portuguese
+German
+Italian
+French
+```
 
-- `brightness_threshold`
-  
-  If set, pixels whose brightness are less than the threshold will be blackened out. Valid brightness values range from 0 (black) to 255 (white). This can help improve accuracy when performing OCR on videos with white subtitles.
+### `max_merge_gap`
 
-- `frames_to_skip`
+Maximum allowed time gap in seconds between two subtitles to be considered for merging if they are similar.
 
-  The number of frames to skip before sampling a frame for OCR. Keep in mind the fps of the input video before increasing.
+Default value:
 
-- `min_subtitle_duration`
+```text
+0.09
+```
 
-  Subtitles shorter than this threshold will be omitted from the final subtitle file.
+Increase this if the output SRT contains repeated subtitle lines that should have been merged.
 
-- `normalize_to_simplified_chinese`
+### `time_start` and `time_end`
 
-  Traditional Chinese characters will be converted to Simplified Chinese before processing. Only active for \"Chinese & English\". Tries to fix subtitle merging issues caused by the OCR model inconsistently mixing Traditional characters into Simplified text.
+Extract subtitles from only part of the video.
 
-- `use_server_model`
+Subtitle timestamps are still calculated according to the full video timeline.
 
-  By default the smaller model are used for the OCR process. This parameter enables the usage of the server models for OCR. This can result in better text detection at the cost of more processing power. Should only ever be used in the GPU version.
+### `use_fullframe`
 
+By default, the specified crop area is used for OCR. If no crop is specified, the bottom third of the frame is used.
+
+Set this to `True` to OCR the entire frame.
+
+### `crop_x`, `crop_y`, `crop_width`, `crop_height`
+
+Specify the bounding area in pixels used for OCR.
+
+![Crop example](Pictures/crop_example.png)
+
+### `crop_x2`, `crop_y2`, `crop_width2`, `crop_height2`
+
+Specify a second bounding area in pixels for OCR when needed.
+
+### `subtitle_alignment` and `subtitle_alignment2`
+
+Subtitle alignment values for ASS / Advanced SubStation Alpha positioning.
+
+Valid values:
+
+```text
+bottom-left
+bottom-center
+bottom-right
+middle-left
+middle-center
+middle-right
+top-left
+top-center
+top-right
+```
+
+### `ocr_image_max_width`
+
+Downscales the cropped image frame so its width does not exceed this value before passing it to OCR.
+
+Lower values improve speed.
+
+Higher values may improve accuracy.
+
+### `use_gpu`
+
+Set to `True` to perform OCR with GPU acceleration where supported.
+
+For AMD DirectML mode, also set:
+
+```bat
+set VIDEOCR_DIRECTML_DEVICE_INDEX=1
+```
+
+if your discrete AMD GPU is adapter index `1`.
+
+### `use_angle_cls`
+
+Set to `True` if classification should be enabled.
+
+For PaddleOCR only.
+
+### `brightness_threshold`
+
+If set, pixels whose brightness is less than the threshold are blackened out.
+
+Valid brightness values range from:
+
+```text
+0
+```
+
+to:
+
+```text
+255
+```
+
+This can help improve accuracy when OCR is performed on videos with white subtitles.
+
+### `frames_to_skip`
+
+Number of frames to skip before sampling a frame for OCR.
+
+For 1080p anime episodes, a good starting point is:
+
+```text
+2
+```
+
+Increase for speed.
+
+Decrease for more accurate timing.
+
+### `min_subtitle_duration`
+
+Subtitles shorter than this threshold are omitted from the final subtitle file.
+
+### `normalize_to_simplified_chinese`
+
+Traditional Chinese characters are converted to Simplified Chinese before processing.
+
+Only active for Chinese & English.
+
+### `use_server_model`
+
+Enables server models for OCR.
+
+This may improve detection at the cost of more processing power.
+
+Primarily for PaddleOCR GPU usage.
+
+## AMD DirectML Environment Variables
+
+### `VIDEOCR_DIRECTML_DEVICE_INDEX`
+
+Selects the DirectML adapter index.
+
+Examples:
+
+```bat
+set VIDEOCR_DIRECTML_DEVICE_INDEX=0
+```
+
+usually selects the first DirectML adapter.
+
+```bat
+set VIDEOCR_DIRECTML_DEVICE_INDEX=1
+```
+
+may select the discrete GPU on systems with integrated graphics plus an RX 7900 XTX.
+
+### `VIDEOCR_EASYOCR_RECOGNITION_DEVICE`
+
+Optional advanced setting.
+
+Supported values:
+
+```text
+cpu
+directml
+```
+
+Default:
+
+```text
+cpu
+```
+
+Keep this on `cpu` unless you are testing experimental full DirectML recognition. DirectML recognition may fail on some EasyOCR models due to unsupported LSTM-related operators.
 
 ## Build and Compile Instructions
 
-- Requirements:
-    - Python 3.9 or higher
+### Requirements
 
-    - Windows:
-        - C++ Build Tools (e.g Visual Studio with "Desktop development with C++" kit installed)
-        - 7zip (needs to be available from path)
-        - Tkinter (comes with the default python installation on Windows)
+- Python 3.9 or higher
+- Python 3.12 recommended for AMD DirectML mode
 
-    - Linux:
-        - 7zip
-        - Tkinter
-        - Working dbus installation is recommended
+Windows:
 
-- Instructions:
+- C++ Build Tools, for example Visual Studio with **Desktop development with C++**
+- 7-Zip available in PATH
+- Tkinter, included with the default Python installation on Windows
 
-    - Clone the repository to your desired location:
-      ```bash
-      git clone https://github.com/timminator/VideOCR.git
-      ```
-    - Navigate into the cloned folder and install all dependencies:
-      ```bash
-      cd VideOCR
-      python -m pip install --upgrade pip
-      pip install . --group all
-      ```
-    - Execute the build script to create the desired build:
-      ```bash
-      python build.py --target cpu
-      ```
-    More info can be found via:
-    ```bash
-    python build.py -h
-    ```
+Linux:
+
+- 7-Zip
+- Tkinter
+- Working dbus installation is recommended
+
+### Clone Repository
+
+```bash
+git clone https://github.com/BaseCrunch/VideOCR.git
+cd VideOCR
+```
+
+If you rename this fork, use your new repository URL instead.
+
+### Install Dependencies
+
+Standard install:
+
+```bash
+python -m pip install --upgrade pip
+pip install . --group all
+```
+
+AMD DirectML source install:
+
+```bat
+py -3.12 -m venv .venv --upgrade-deps
+call .venv\Scripts\activate.bat
+
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e ".[directml]"
+python -m pip install --force-reinstall --no-cache-dir "sympy==1.13.3" "mpmath==1.3.0"
+```
+
+### Build
+
+CPU build:
+
+```bash
+python build.py --target cpu
+```
+
+CUDA 11.8 build:
+
+```bash
+python build.py --target gpu-cuda11.8
+```
+
+CUDA 12.9 build:
+
+```bash
+python build.py --target gpu-cuda12.9
+```
+
+AMD DirectML build, if enabled in this fork:
+
+```bash
+python build.py --target gpu-directml
+```
+
+More information:
+
+```bash
+python build.py -h
+```
+
+## Troubleshooting
+
+### `No suitable Python runtime found`
+
+Install Python 3.12:
+
+```bat
+winget install -e --id Python.Python.3.12
+```
+
+Then open a new CMD and verify:
+
+```bat
+py -0p
+```
+
+### `No module named pip`
+
+Repair pip inside the active venv:
+
+```bat
+python -m ensurepip --upgrade
+python -m pip install --upgrade pip setuptools wheel
+```
+
+### `No module named av`
+
+Install project dependencies inside the active venv:
+
+```bat
+python -m pip install -e ".[directml]"
+```
+
+### `No module named sympy.core`
+
+Repair SymPy:
+
+```bat
+python -m pip install --force-reinstall --no-cache-dir "sympy==1.13.3" "mpmath==1.3.0"
+```
+
+### DirectML uses integrated GPU instead of RX 7900 XTX
+
+Set the adapter index:
+
+```bat
+set VIDEOCR_DIRECTML_DEVICE_INDEX=1
+```
+
+Then run:
+
+```bat
+python tools\test_directml.py
+python tools\diagnose_easyocr_directml.py
+python VideOCR.py
+```
+
+Also set Windows graphics preference for:
+
+```text
+.venv\Scripts\python.exe
+```
+
+to **High performance**.
+
+### EasyOCR DirectML fails on LSTM / CRNN recognition
+
+Keep hybrid mode enabled.
+
+Use:
+
+```text
+Detection: DirectML
+Recognition: CPU
+```
+
+Do not force recognition to DirectML unless testing.
+
+## Credits
+
+This fork is based on the original **VideOCR** project by `timminator`.
+
+Original project:
+
+```text
+https://github.com/timminator/VideOCR
+```
+
+AMD DirectML fork changes include:
+
+- `easyocr_directml` backend
+- DirectML adapter selection
+- RX 7900 XTX development helper scripts
+- DirectML diagnostics
+- Hybrid EasyOCR mode for stable AMD GPU usage
