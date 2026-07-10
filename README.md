@@ -931,3 +931,7 @@ This fork includes an experimental AMD path for Windows Radeon GPUs:
 - GUI Last Run Benchmark panel
 
 The ONNX engine is experimental and safely falls back to EasyOCR DirectML Hybrid if the ONNX Runtime DirectML stack is unavailable.
+
+### AMD DirectML v14 experimental tuning
+
+This fork includes an experimental AMD DirectML path. v14 adds ONNX Runtime DirectML tuning controls and an optional benchmark comparison between ONNX DirectML and EasyOCR DirectML Hybrid. For RX 7900 XTX testing, use ONNX DirectML tuning set to **Balanced ONNX** first to reduce excessive VRAM reservation, then try **Max Throughput** if it is stable.

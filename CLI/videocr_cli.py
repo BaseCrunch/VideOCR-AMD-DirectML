@@ -124,6 +124,9 @@ def main() -> None:
     parser.add_argument('--directml_performance_preset', type=str, choices=['compatibility', 'balanced', 'max', 'manual'], default='balanced', help='DirectML grid/performance preset for AMD GPUs (default: balanced)')
     parser.add_argument('--directml_recognition_mode', type=str, choices=['stable', 'auto', 'experimental'], default='stable', help='DirectML recognition mode: stable=CPU recognizer, auto=try GPU recognizer with fallback, experimental=try GPU recognizer (default: stable)')
     parser.add_argument('--directml_frame_scan_mode', type=str, choices=['cpu_ssim', 'directml_ssim', 'ffmpeg_d3d11va'], default='cpu_ssim', help='Step 1 frame scan mode. cpu_ssim is safest; directml_ssim moves SSIM-style comparisons to DirectML/AMD GPU; ffmpeg_d3d11va uses FFmpeg D3D11VA hardware decode prototype plus DirectML SSIM for EasyOCR DirectML.')
+    parser.add_argument('--onnx_directml_tuning', type=str, choices=['low_vram', 'balanced', 'max', 'manual'], default='balanced', help='ONNX DirectML tuning mode. low_vram/balanced reduce grid size and memory pressure; max uses larger grids; manual uses the DirectML grid width/height values (default: balanced)')
+    parser.add_argument('--benchmark_compare_engine', type=lambda x: x.lower() == 'true', default=False, help='Run a small sample EasyOCR-vs-ONNX benchmark after the main ONNX run (default: false)')
+    parser.add_argument('--benchmark_compare_sample_grids', type=restricted_int(min_val=1, max_val=20), default=3, help='Number of stitched OCR grids to use for the optional benchmark comparison (default: 3)')
     parser.add_argument('--crop_x', type=int, default=None, help='(Zone 1) Crop start X')
     parser.add_argument('--crop_y', type=int, default=None, help='(Zone 1) Crop start Y')
     parser.add_argument('--crop_width', type=int, default=None, help='(Zone 1) Crop width')
@@ -154,6 +157,11 @@ def main() -> None:
             print(f"DirectML performance preset: {args.directml_performance_preset}", flush=True)
             print(f"DirectML recognition mode: {args.directml_recognition_mode}", flush=True)
             print(f"DirectML frame scan mode: {args.directml_frame_scan_mode}", flush=True)
+            if args.ocr_engine == 'onnx_directml':
+                os.environ['VIDEOCR_ONNX_DIRECTML_TUNING'] = args.onnx_directml_tuning
+                print(f"ONNX DirectML tuning mode: {args.onnx_directml_tuning}", flush=True)
+                if args.benchmark_compare_engine:
+                    print(f"Benchmark compare enabled: sample grids={args.benchmark_compare_sample_grids}", flush=True)
 
         if args.time_start and args.time_end:
             start_ms = utils.get_ms_from_time_str(args.time_start)
@@ -221,7 +229,10 @@ def main() -> None:
                 directml_grid_max_height=args.directml_grid_max_height,
                 directml_performance_preset=args.directml_performance_preset,
                 directml_recognition_mode=args.directml_recognition_mode,
-                directml_frame_scan_mode=args.directml_frame_scan_mode
+                directml_frame_scan_mode=args.directml_frame_scan_mode,
+                onnx_directml_tuning=args.onnx_directml_tuning,
+                benchmark_compare_engine=args.benchmark_compare_engine,
+                benchmark_compare_sample_grids=args.benchmark_compare_sample_grids
             )
     except ValueError as e:
         print(f"Error: {e}")

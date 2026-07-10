@@ -68,7 +68,9 @@ class Video:
             self, temp_dir: str, target_end_str: str, ssim_threshold_ratio: float, subtitle_position: str,
             brightness_threshold: int | None, frames_to_skip: int, max_stitch_width: int, max_stitch_height: int,
             directml_recognition_mode: str, use_gpu: bool, ocr_engine: str, conf_threshold_ratio: float, lang: str,
-            normalize_to_simplified_chinese: bool, step1_start: float, perf_total_start: float) -> bool:
+            normalize_to_simplified_chinese: bool, step1_start: float, perf_total_start: float,
+            onnx_directml_tuning: str = "balanced", benchmark_compare_engine: bool = False,
+            benchmark_compare_sample_grids: int = 3) -> bool:
         """Experimental AMD path: FFmpeg D3D11VA decode + raw cropped frames.
 
         This mode supports the common single subtitle crop workflow first. FFmpeg
@@ -296,6 +298,34 @@ class Video:
         )
         directml_ocr_end = time.perf_counter()
 
+        if ocr_engine == "onnx_directml" and benchmark_compare_engine:
+            try:
+                sample_count = max(1, min(int(benchmark_compare_sample_grids or 3), total_grids))
+                sample_names = sorted(det_stitch_map.keys())[:sample_count]
+                sample_map = {name: det_stitch_map[name] for name in sample_names}
+                sample_dir = os.path.join(temp_dir, "benchmark_compare_grids")
+                os.makedirs(sample_dir, exist_ok=True)
+                for name in sample_names:
+                    shutil.copy2(os.path.join(det_stitched_dir, name), os.path.join(sample_dir, name))
+
+                print(f"[BenchCompare] Running EasyOCR Hybrid sample on {sample_count} stitched grid(s)...", flush=True)
+                from .easyocr_directml import run_easyocr_on_stitched_images
+                compare_start = time.perf_counter()
+                _ = run_easyocr_on_stitched_images(sample_dir, sample_map, self.lang, use_gpu, "stable")
+                compare_elapsed = time.perf_counter() - compare_start
+                onnx_per_grid = (directml_ocr_end - directml_ocr_start) / total_grids if total_grids else 0.0
+                easy_per_grid = compare_elapsed / sample_count if sample_count else 0.0
+                print(
+                    f"[BenchCompare] ONNX full OCR: {directml_ocr_end - directml_ocr_start:.2f}s / {total_grids} grid(s) = {onnx_per_grid:.2f}s/grid",
+                    flush=True,
+                )
+                print(
+                    f"[BenchCompare] EasyOCR Hybrid sample: {compare_elapsed:.2f}s / {sample_count} grid(s) = {easy_per_grid:.2f}s/grid; projected full={easy_per_grid * total_grids:.2f}s",
+                    flush=True,
+                )
+            except Exception as e:
+                print(f"[BenchCompare] EasyOCR-vs-ONNX sample benchmark failed: {e}", flush=True)
+
         active_frame_coords: set[tuple[int, int]] = set()
         for mappings in det_stitch_map.values():
             for m in mappings:
@@ -327,16 +357,65 @@ class Video:
         total_elapsed = time.perf_counter() - perf_total_start
         print(f"[Perf] Step 1 FFmpeg/D3D11VA decode/filter/stitch: {step1_end - step1_start:.2f}s", flush=True)
         print(f"[Perf] Step 2 {directml_label}: {directml_ocr_end - directml_ocr_start:.2f}s", flush=True)
+        if ocr_engine == "onnx_directml":
+            print(f"[Perf] ONNX tuning: {onnx_directml_tuning}; grid target: {max_stitch_width}x{max_stitch_height}", flush=True)
         print(f"[Perf] Filtered OCR frames: {total_stitched_frames}; stitched grids: {total_grids}; average frames/grid: {avg_frames_per_grid:.1f}", flush=True)
         print(f"[Perf] Total OCR preparation/runtime before subtitle merge: {total_elapsed:.2f}s", flush=True)
         return True
+
+    @staticmethod
+    def _resolve_directml_grid_size(
+            ocr_engine: str,
+            directml_performance_preset: str,
+            directml_grid_max_width: int,
+            directml_grid_max_height: int,
+            onnx_directml_tuning: str) -> tuple[int, int, str]:
+        """Resolve stitched-grid dimensions for DirectML OCR engines.
+
+        EasyOCR's detector benefits from very large 4096 grids on high-end AMD
+        cards. RapidOCR/ONNX DirectML can reserve huge VRAM on 4096x4096 grids,
+        so v14 gives ONNX its own safer tuning curve.
+        """
+        engine = str(ocr_engine or "").strip().lower()
+        preset = str(directml_performance_preset or "balanced").strip().lower()
+        tuning = str(onnx_directml_tuning or "balanced").strip().lower()
+
+        if engine == "onnx_directml":
+            onnx_sizes = {
+                "low_vram": (1600, 1600),
+                "balanced": (2048, 2048),
+                "max": (3072, 3072),
+            }
+            if tuning in onnx_sizes:
+                w, h = onnx_sizes[tuning]
+                return w, h, f"ONNX tuning={tuning}"
+            # manual ONNX tuning intentionally uses the visible grid boxes.
+            try:
+                return max(512, int(directml_grid_max_width or 2048)), max(512, int(directml_grid_max_height or 2048)), "ONNX tuning=manual"
+            except Exception:
+                return 2048, 2048, "ONNX tuning=manual fallback"
+
+        preset_sizes = {
+            "compatibility": (1600, 1600),
+            "balanced": (2400, 2400),
+            "max": (4096, 4096),
+        }
+        if preset in preset_sizes:
+            w, h = preset_sizes[preset]
+            return w, h, f"DirectML preset={preset}"
+        try:
+            return max(512, int(directml_grid_max_width or 2400)), max(512, int(directml_grid_max_height or 2400)), "DirectML preset=manual"
+        except Exception:
+            return 2400, 2400, "DirectML preset=manual fallback"
+
 
     def run_ocr(self, use_gpu: bool, ocr_engine: str, lang: str, use_angle_cls: bool, time_start: str, time_end: str, conf_threshold: int,
                 use_fullframe: bool, brightness_threshold: int | None, ssim_threshold: int, subtitle_position: str, frames_to_skip: int,
                 crop_zones: list[dict[str, int]], ocr_image_max_width: int, normalize_to_simplified_chinese: bool,
                 directml_grid_max_width: int = 2400, directml_grid_max_height: int = 2400,
                 directml_performance_preset: str = "balanced", directml_recognition_mode: str = "stable",
-                directml_frame_scan_mode: str = "cpu_ssim") -> None:
+                directml_frame_scan_mode: str = "cpu_ssim", onnx_directml_tuning: str = "balanced",
+                benchmark_compare_engine: bool = False, benchmark_compare_sample_grids: int = 3) -> None:
         perf_total_start = time.perf_counter()
         step1_start = perf_total_start
         conf_threshold_ratio = conf_threshold / 100
@@ -346,6 +425,10 @@ class Video:
         self.validated_zones = []
         self.pred_frames_zone1 = []
         self.pred_frames_zone2 = []
+
+        if ocr_engine == "onnx_directml":
+            os.environ["VIDEOCR_ONNX_DIRECTML_TUNING"] = str(onnx_directml_tuning or "balanced").strip().lower() or "balanced"
+            print(f"ONNX DirectML tuning mode: {os.environ['VIDEOCR_ONNX_DIRECTML_TUNING']}", flush=True)
 
         user_start_ms = 0.0
         if time_start:
@@ -432,26 +515,18 @@ class Video:
         try:
             ffmpeg_mode = str(directml_frame_scan_mode or "cpu_ssim").strip().lower() == "ffmpeg_d3d11va"
             if ocr_engine in ("easyocr_directml", "onnx_directml") and ffmpeg_mode:
-                preset = str(directml_performance_preset or "balanced").strip().lower()
-                preset_sizes = {
-                    "compatibility": (1600, 1600),
-                    "balanced": (2400, 2400),
-                    "max": (4096, 4096),
-                }
-                if preset in preset_sizes:
-                    ffmpeg_grid_w, ffmpeg_grid_h = preset_sizes[preset]
-                else:
-                    try:
-                        ffmpeg_grid_w = max(512, int(directml_grid_max_width or 2400))
-                        ffmpeg_grid_h = max(512, int(directml_grid_max_height or 2400))
-                    except Exception:
-                        ffmpeg_grid_w, ffmpeg_grid_h = 2400, 2400
+                ffmpeg_grid_w, ffmpeg_grid_h, grid_note = self._resolve_directml_grid_size(
+                    ocr_engine, directml_performance_preset, directml_grid_max_width,
+                    directml_grid_max_height, onnx_directml_tuning
+                )
+                print(f"DirectML stitched grid target: {ffmpeg_grid_w}x{ffmpeg_grid_h}px ({grid_note})", flush=True)
 
                 used_ffmpeg_hw_path = self._run_easyocr_directml_ffmpeg_hw_scan(
                     temp_dir, target_end_str, ssim_threshold_ratio, subtitle_position,
                     brightness_threshold, frames_to_skip, ffmpeg_grid_w, ffmpeg_grid_h,
                     directml_recognition_mode, use_gpu, ocr_engine, conf_threshold_ratio,
-                    lang, normalize_to_simplified_chinese, step1_start, perf_total_start
+                    lang, normalize_to_simplified_chinese, step1_start, perf_total_start,
+                    onnx_directml_tuning, benchmark_compare_engine, benchmark_compare_sample_grids
                 )
                 if used_ffmpeg_hw_path:
                     return
@@ -665,21 +740,10 @@ class Video:
             MAX_STITCH_HEIGHT = DEFAULT_STITCH_HEIGHT
 
             if ocr_engine in ("easyocr_directml", "onnx_directml"):
-                preset = str(directml_performance_preset or "balanced").strip().lower()
-                preset_sizes = {
-                    "compatibility": (1600, 1600),
-                    "balanced": (2400, 2400),
-                    "max": (4096, 4096),
-                }
-                if preset in preset_sizes:
-                    MAX_STITCH_WIDTH, MAX_STITCH_HEIGHT = preset_sizes[preset]
-                else:
-                    try:
-                        MAX_STITCH_WIDTH = max(512, int(directml_grid_max_width or 2400))
-                        MAX_STITCH_HEIGHT = max(512, int(directml_grid_max_height or 2400))
-                    except Exception:
-                        MAX_STITCH_WIDTH = 2400
-                        MAX_STITCH_HEIGHT = 2400
+                MAX_STITCH_WIDTH, MAX_STITCH_HEIGHT, grid_note = self._resolve_directml_grid_size(
+                    ocr_engine, directml_performance_preset, directml_grid_max_width,
+                    directml_grid_max_height, onnx_directml_tuning
+                )
 
             GRID_SPACING = 10
             FILENAME_ZERO_PADDING = 8
@@ -687,7 +751,9 @@ class Video:
             if ocr_engine in ("easyocr_directml", "onnx_directml"):
                 print(f"DirectML performance preset: {directml_performance_preset}", flush=True)
                 print(f"DirectML recognition mode: {directml_recognition_mode}", flush=True)
-                print(f"DirectML stitched grid target: {MAX_STITCH_WIDTH}x{MAX_STITCH_HEIGHT}px", flush=True)
+                if ocr_engine == "onnx_directml":
+                    print(f"ONNX DirectML tuning mode: {onnx_directml_tuning}", flush=True)
+                print(f"DirectML stitched grid target: {MAX_STITCH_WIDTH}x{MAX_STITCH_HEIGHT}px ({grid_note})", flush=True)
 
             batch_limits: dict[int, int] = {}
             for z_idx, z in enumerate(self.validated_zones):
@@ -920,6 +986,34 @@ class Video:
                 )
                 directml_ocr_end = time.perf_counter()
 
+                if ocr_engine == "onnx_directml" and benchmark_compare_engine:
+                    try:
+                        sample_count = max(1, min(int(benchmark_compare_sample_grids or 3), total_grids))
+                        sample_names = sorted(det_stitch_map.keys())[:sample_count]
+                        sample_map = {name: det_stitch_map[name] for name in sample_names}
+                        sample_dir = os.path.join(temp_dir, "benchmark_compare_grids")
+                        os.makedirs(sample_dir, exist_ok=True)
+                        for name in sample_names:
+                            shutil.copy2(os.path.join(det_stitched_dir, name), os.path.join(sample_dir, name))
+
+                        print(f"[BenchCompare] Running EasyOCR Hybrid sample on {sample_count} stitched grid(s)...", flush=True)
+                        from .easyocr_directml import run_easyocr_on_stitched_images
+                        compare_start = time.perf_counter()
+                        _ = run_easyocr_on_stitched_images(sample_dir, sample_map, self.lang, use_gpu, "stable")
+                        compare_elapsed = time.perf_counter() - compare_start
+                        onnx_per_grid = (directml_ocr_end - directml_ocr_start) / total_grids if total_grids else 0.0
+                        easy_per_grid = compare_elapsed / sample_count if sample_count else 0.0
+                        print(
+                            f"[BenchCompare] ONNX full OCR: {directml_ocr_end - directml_ocr_start:.2f}s / {total_grids} grid(s) = {onnx_per_grid:.2f}s/grid",
+                            flush=True,
+                        )
+                        print(
+                            f"[BenchCompare] EasyOCR Hybrid sample: {compare_elapsed:.2f}s / {sample_count} grid(s) = {easy_per_grid:.2f}s/grid; projected full={easy_per_grid * total_grids:.2f}s",
+                            flush=True,
+                        )
+                    except Exception as e:
+                        print(f"[BenchCompare] EasyOCR-vs-ONNX sample benchmark failed: {e}", flush=True)
+
                 active_frame_coords: set[tuple[int, int]] = set()
                 for mappings in det_stitch_map.values():
                     for m in mappings:
@@ -958,6 +1052,8 @@ class Video:
                 total_elapsed = time.perf_counter() - perf_total_start
                 print(f"[Perf] Step 1 frame scan/filter/stitch: {step1_end - step1_start:.2f}s", flush=True)
                 print(f"[Perf] Step 2 {directml_label}: {directml_ocr_end - directml_ocr_start:.2f}s", flush=True)
+                if ocr_engine == "onnx_directml":
+                    print(f"[Perf] ONNX tuning: {onnx_directml_tuning}; grid target: {MAX_STITCH_WIDTH}x{MAX_STITCH_HEIGHT}", flush=True)
                 print(f"[Perf] Filtered OCR frames: {total_stitched_frames}; stitched grids: {total_grids}; average frames/grid: {avg_frames_per_grid:.1f}", flush=True)
                 print(f"[Perf] Total OCR preparation/runtime before subtitle merge: {total_elapsed:.2f}s", flush=True)
                 return

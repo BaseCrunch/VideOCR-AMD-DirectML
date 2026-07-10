@@ -284,6 +284,15 @@ DIRECTML_FRAME_SCAN_MODES = [
 DIRECTML_FRAME_SCAN_DISPLAY = [name for name, _ in DIRECTML_FRAME_SCAN_MODES]
 DIRECTML_FRAME_SCAN_TO_CLI = {name: value for name, value in DIRECTML_FRAME_SCAN_MODES}
 DIRECTML_FRAME_SCAN_FROM_CLI = {value: name for name, value in DIRECTML_FRAME_SCAN_MODES}
+ONNX_DIRECTML_TUNING_MODES = [
+    ("Low VRAM / safer", "low_vram"),
+    ("Balanced ONNX (recommended)", "balanced"),
+    ("Max Throughput / higher VRAM", "max"),
+    ("Manual Grid Size", "manual"),
+]
+ONNX_DIRECTML_TUNING_DISPLAY = [name for name, _ in ONNX_DIRECTML_TUNING_MODES]
+ONNX_DIRECTML_TUNING_TO_CLI = {name: value for name, value in ONNX_DIRECTML_TUNING_MODES}
+ONNX_DIRECTML_TUNING_FROM_CLI = {value: name for name, value in ONNX_DIRECTML_TUNING_MODES}
 try:
     DEFAULT_DOCUMENTS_DIR = str(pathlib.Path.home() / "Documents")
 except Exception:
@@ -1287,6 +1296,20 @@ def directml_frame_scan_from_cli(value: Any) -> str:
     return DIRECTML_FRAME_SCAN_FROM_CLI.get(text, "CPU SSIM (compatible)")
 
 
+def onnx_tuning_to_cli(value: Any) -> str:
+    text = str(value or "").strip()
+    if text in ONNX_DIRECTML_TUNING_TO_CLI:
+        return ONNX_DIRECTML_TUNING_TO_CLI[text]
+    if text in ONNX_DIRECTML_TUNING_FROM_CLI:
+        return text
+    return "balanced"
+
+
+def onnx_tuning_from_cli(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return ONNX_DIRECTML_TUNING_FROM_CLI.get(text, "Balanced ONNX (recommended)")
+
+
 def directml_index_to_option(options: list[str], selected_index: Any) -> str:
     """Pick a DirectML combo display value from a stored numeric index."""
     selected = str(selected_index or "").strip()
@@ -1356,6 +1379,9 @@ def get_default_settings() -> dict[str, Any]:
     '--directml_performance_preset': 'Balanced (recommended)',
     '--directml_recognition_mode': 'Stable Hybrid (recommended)',
     '--directml_frame_scan_mode': 'CPU SSIM (compatible)',
+    '--onnx_directml_tuning': 'Balanced ONNX (recommended)',
+    '--benchmark_compare_engine': False,
+    '--benchmark_compare_sample_grids': '3',
     '--frames_to_skip': str(DEFAULT_FRAMES_TO_SKIP),
     '--use_fullframe': False,
     '--use_gpu': True,
@@ -1972,6 +1998,7 @@ def get_processing_args(values: dict[str, Any], window: sg.Window) -> tuple[dict
         '--directml_device_index': (int, 0, None, "DirectML Adapter Index"),
         '--directml_grid_max_width': (int, 512, None, "DirectML Grid Max Width"),
         '--directml_grid_max_height': (int, 512, None, "DirectML Grid Max Height"),
+        '--benchmark_compare_sample_grids': (int, 1, 20, "Benchmark Compare Sample Grids"),
         '--frames_to_skip': (int, 0, None, "Frames to Skip"),
         '--max_merge_gap': (float, 0.0, None, "Max Merge Gap"),
         '--min_subtitle_duration': (float, 0.0, None, "Minimum Subtitle Duration"),
@@ -2041,6 +2068,8 @@ def get_processing_args(values: dict[str, Any], window: sg.Window) -> tuple[dict
                 args[stripped_key] = directml_recognition_to_cli(value)
             elif key == '--directml_frame_scan_mode':
                 args[stripped_key] = directml_frame_scan_to_cli(value)
+            elif key == '--onnx_directml_tuning':
+                args[stripped_key] = onnx_tuning_to_cli(value)
             elif isinstance(value, bool):
                 args[stripped_key] = value
             elif value is not None and str(value).strip() != '':
@@ -2122,7 +2151,7 @@ def run_videocr(args_dict: dict[str, Any], window: sg.Window) -> bool:
     WARNING_HARDWARE_PATTERN = re.compile(r"Hardware Check Warning: (.*)")
     PROCESS_ERROR_PATTERN = re.compile(r"Error: Process failed.")
     STEP1_PROGRESS_PATTERN = re.compile(r"Step (\d+)/\d+: Processing video\.\.\. Current: ([\d:]+) / ([\d:]+|Unknown), Frame: (\d+)")
-    STEP_IMAGE_PROGRESS_PATTERN = re.compile(r"Step (\d+)/\d+: Performing (?:Text-Detection|OCR) on image (\d+) of (\d+)")
+    STEP_IMAGE_PROGRESS_PATTERN = re.compile(r"Step (\d+)/\d+: Performing (?:Text-Detection|OCR|ONNX DirectML OCR) on image (\d+) of (\d+)")
     REPACKING_PATTERN = re.compile(r"Analyzing frame (\d+) of (\d+)")
     STARTING_PADDLEOCR_PATTERN = re.compile(r"Starting PaddleOCR\.\.\.")
     STARTING_LENS_PATTERN = re.compile(r"Starting Google Lens CLI\.\.\.")
@@ -2134,6 +2163,7 @@ def run_videocr(args_dict: dict[str, Any], window: sg.Window) -> bool:
     REACHED_END_TIME_PATTERN = re.compile(r"Reached end time\. Stopping\.")
     PERF_PATTERN = re.compile(r"^\[Perf\]\s*(.+)$")
     BENCH_PATTERN = re.compile(r"^\[Bench\]\s*(.+)$")
+    BENCH_COMPARE_PATTERN = re.compile(r"^\[BenchCompare\]\s*(.+)$")
 
     last_reported_percentage_step1 = -1.0
     last_reported_percentage_step2 = -1.0
@@ -2181,7 +2211,8 @@ def run_videocr(args_dict: dict[str, Any], window: sg.Window) -> bool:
 
                 perf_match = PERF_PATTERN.search(line)
                 bench_match = BENCH_PATTERN.search(line)
-                if perf_match or bench_match:
+                bench_compare_match = BENCH_COMPARE_PATTERN.search(line)
+                if perf_match or bench_match or bench_compare_match:
                     clean_line = line.strip()
                     gui_queue.put(('-VIDEOCR_OUTPUT-', clean_line + '\n'))
                     gui_queue.put(('-BENCHMARK-UPDATE-', clean_line))
@@ -2736,6 +2767,11 @@ tab2_content = [
      sg.Combo(DIRECTML_RECOGNITION_DISPLAY, default_value="Stable Hybrid (recommended)", key="--directml_recognition_mode", size=(42, 1), readonly=True, enable_events=True)],
     [sg.Text("AMD Frame Scan Mode:", size=(38, 1), key='-LBL-DML_FRAME_SCAN-'),
      sg.Combo(DIRECTML_FRAME_SCAN_DISPLAY, default_value="CPU SSIM (compatible)", key="--directml_frame_scan_mode", size=(42, 1), readonly=True, enable_events=True)],
+    [sg.Text("ONNX DirectML Tuning:", size=(38, 1), key='-LBL-ONNX_TUNING-'),
+     sg.Combo(ONNX_DIRECTML_TUNING_DISPLAY, default_value="Balanced ONNX (recommended)", key="--onnx_directml_tuning", size=(42, 1), readonly=True, enable_events=True)],
+    [sg.Checkbox("Benchmark Compare ONNX vs EasyOCR sample", default=False, key="--benchmark_compare_engine", enable_events=True)],
+    [sg.Text("Benchmark Compare Sample Grids:", size=(38, 1), key='-LBL-BENCH_COMPARE_GRIDS-'),
+     sg.Input('3', key="--benchmark_compare_sample_grids", size=(10, 1), enable_events=True)],
     [sg.Text("DirectML Grid Max Width:", size=(38, 1), key='-LBL-DML_GRID_W-'),
      sg.Input('2400', key="--directml_grid_max_width", size=(10, 1), enable_events=True)],
     [sg.Text("DirectML Grid Max Height:", size=(38, 1), key='-LBL-DML_GRID_H-'),
@@ -3160,6 +3196,9 @@ KEYS_TO_AUTOSAVE = [
     '--directml_performance_preset',
     '--directml_recognition_mode',
     '--directml_frame_scan_mode',
+    '--onnx_directml_tuning',
+    '--benchmark_compare_engine',
+    '--benchmark_compare_sample_grids',
     '--frames_to_skip',
     '--use_fullframe',
     '--use_gpu',
@@ -3334,6 +3373,20 @@ while True:
 
         elif event == '--directml_frame_scan_mode':
             save_settings(window, values)
+
+        elif event == '--onnx_directml_tuning':
+            tuning = onnx_tuning_to_cli(values.get('--onnx_directml_tuning', 'balanced'))
+            if tuning == 'low_vram':
+                window['--directml_grid_max_width'].update('1600')
+                window['--directml_grid_max_height'].update('1600')
+            elif tuning == 'balanced':
+                window['--directml_grid_max_width'].update('2048')
+                window['--directml_grid_max_height'].update('2048')
+            elif tuning == 'max':
+                window['--directml_grid_max_width'].update('3072')
+                window['--directml_grid_max_height'].update('3072')
+            refreshed_values = window.read(timeout=0)[1]
+            save_settings(window, refreshed_values)
 
         # --- Handle possible output path change ---
         if event == '--save_in_video_dir':
@@ -4371,6 +4424,14 @@ while True:
                         continue
                     gui_key = f"--{arg_key}"
                     if gui_key in window.AllKeysDict:
+                        if gui_key == '--directml_performance_preset':
+                            arg_val = directml_preset_from_cli(arg_val)
+                        elif gui_key == '--directml_recognition_mode':
+                            arg_val = directml_recognition_from_cli(arg_val)
+                        elif gui_key == '--directml_frame_scan_mode':
+                            arg_val = directml_frame_scan_from_cli(arg_val)
+                        elif gui_key == '--onnx_directml_tuning':
+                            arg_val = onnx_tuning_from_cli(arg_val)
                         window[gui_key].update(arg_val)
 
                 new_boxes: list[dict[str, Any]] = []

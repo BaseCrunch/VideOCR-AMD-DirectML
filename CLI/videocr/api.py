@@ -16,7 +16,8 @@ def save_subtitles_to_file(
         normalize_to_simplified_chinese: bool = True, subtitle_alignments: list[str | None] | None = None,
         directml_grid_max_width: int = 2400, directml_grid_max_height: int = 2400,
         directml_performance_preset: str = "balanced", directml_recognition_mode: str = "stable",
-        directml_frame_scan_mode: str = "cpu_ssim") -> None:
+        directml_frame_scan_mode: str = "cpu_ssim", onnx_directml_tuning: str = "balanced",
+        benchmark_compare_engine: bool = False, benchmark_compare_sample_grids: int = 3) -> None:
 
     total_start = time.perf_counter()
 
@@ -62,7 +63,8 @@ def save_subtitles_to_file(
             use_fullframe, brightness_threshold, ssim_threshold, subtitle_position,
             frames_to_skip, crop_zones, ocr_image_max_width, normalize_to_simplified_chinese,
             directml_grid_max_width, directml_grid_max_height,
-            directml_performance_preset, directml_recognition_mode, directml_frame_scan_mode
+            directml_performance_preset, directml_recognition_mode, directml_frame_scan_mode,
+            onnx_directml_tuning, benchmark_compare_engine, benchmark_compare_sample_grids
         )
         ocr_end = time.perf_counter()
     except Exception as e:
@@ -86,6 +88,6 @@ def save_subtitles_to_file(
         print(
             f"[Bench] Video duration: {video_sec:.2f}s; OCR runtime: {ocr_runtime_sec:.2f}s; "
             f"total runtime: {total_runtime_sec:.2f}s; speed: {speed_x:.2f}x real-time; "
-            f"engine: {ocr_engine}; frame scan: {directml_frame_scan_mode}; recognition: {directml_recognition_mode}",
+            f"engine: {ocr_engine}; frame scan: {directml_frame_scan_mode}; recognition: {directml_recognition_mode}; onnx tuning: {onnx_directml_tuning}",
             flush=True,
         )

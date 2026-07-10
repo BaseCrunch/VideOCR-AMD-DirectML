@@ -455,3 +455,47 @@ rapidocr-onnxruntime
 ```
 
 v13 also adds a GUI **Last Run Benchmark** panel. The CLI emits `[Perf]` and `[Bench]` lines with step timing, end-to-end runtime, and speed vs real-time.
+
+## v14 - ONNX DirectML tuning and benchmark compare
+
+v14 adds ONNX-specific tuning because the ONNX Runtime DirectML backend can reserve very large VRAM when OCR grids are too large.
+
+New GUI settings:
+
+- ONNX DirectML Tuning
+  - Low VRAM / safer: 1600x1600 stitched OCR grids
+  - Balanced ONNX (recommended): 2048x2048 stitched OCR grids
+  - Max Throughput / higher VRAM: 3072x3072 stitched OCR grids
+  - Manual Grid Size: uses the visible DirectML Grid Max Width/Height boxes
+
+- Benchmark Compare ONNX vs EasyOCR sample
+  - Optional. Runs a small EasyOCR Hybrid sample after the ONNX run and prints [BenchCompare] lines.
+  - This will make the run longer, so leave it off for normal processing.
+
+New CLI options:
+
+```bat
+--onnx_directml_tuning balanced
+--benchmark_compare_engine false
+--benchmark_compare_sample_grids 3
+```
+
+Recommended v14 ONNX test settings for RX 7900 XTX:
+
+```text
+OCR Engine: ONNX Runtime DirectML (AMD GPU Experimental)
+DirectML GPU: GPU 1: AMD Radeon RX 7900 XTX
+AMD Performance Preset: Max AMD GPU Load
+ONNX DirectML Tuning: Balanced ONNX (recommended)
+AMD Frame Scan Mode: AMD FFmpeg D3D11VA Decode + DirectML SSIM (prototype)
+DirectML Recognition Mode: Stable Hybrid (recommended)
+Frames to Skip: 1 or 2
+Max OCR Image Width: 720
+Benchmark Compare: off for normal runs, on only when comparing
+```
+
+Optional standalone benchmark compare tool:
+
+```bat
+python tools\benchmark_ocr_compare.py "C:\path\to\video.mp4" --crop 0:793:1920:287 --frames-to-skip 1 --onnx-directml-tuning balanced
+```

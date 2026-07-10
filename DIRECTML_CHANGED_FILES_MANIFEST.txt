@@ -1,35 +1,43 @@
-VideOCR AMD DirectML v13 changed files
+VideOCR AMD DirectML v14 changed files
 =====================================
 
-Core:
+v14 goal:
+- Tune the experimental ONNX Runtime DirectML backend so it does not always use huge 4096x4096 OCR grids.
+- Add visible ONNX tuning controls to the GUI.
+- Add optional EasyOCR-vs-ONNX benchmark comparison output.
+- Keep the working v12/v13 AMD paths intact.
+
+Changed files:
 - VideOCR.py
+  - Adds ONNX DirectML Tuning dropdown: Low VRAM / Balanced / Max Throughput / Manual.
+  - Adds optional Benchmark Compare ONNX vs EasyOCR sample checkbox and sample-grid input.
+  - Shows [BenchCompare] lines in the Last Run Benchmark panel.
+  - Converts ONNX tuning display values to CLI values.
+
 - CLI/videocr_cli.py
+  - Adds --onnx_directml_tuning low_vram|balanced|max|manual.
+  - Adds --benchmark_compare_engine true|false.
+  - Adds --benchmark_compare_sample_grids N.
+
 - CLI/videocr/api.py
+  - Passes ONNX tuning and benchmark compare flags into Video.run_ocr.
+  - Includes ONNX tuning in the final [Bench] line.
+
 - CLI/videocr/video.py
-- CLI/videocr/easyocr_directml.py
-- CLI/videocr/directml_frame_filter.py
+  - Adds ONNX-specific stitched grid tuning:
+    low_vram = 1600x1600
+    balanced = 2048x2048
+    max = 3072x3072
+    manual = the visible grid boxes
+  - Keeps EasyOCR Max AMD path at 4096x4096.
+  - Adds optional EasyOCR Hybrid sample benchmark after the ONNX run.
+  - Prints ONNX tuning and grid target in [Perf] output.
+
 - CLI/videocr/onnx_directml_ocr.py
+  - Adds tuning-aware ONNX Runtime session option attempts.
+  - Reports ONNX providers, selected provider order, tuning mode, and RapidOCR kwargs.
+  - Adds per-grid ONNX OCR timing summary.
+  - Keeps safe fallback to EasyOCR DirectML Hybrid.
 
-Tools:
-- tools/test_directml.py
-- tools/diagnose_easyocr_directml.py
-- tools/setup_directml_dev.bat
-- tools/run_directml_cli_test.bat
-- tools/benchmark_amd_decode.py
-- tools/list_directml_adapters.py
-
-Docs/config:
-- pyproject.toml
-- README.md
-- README_AMD_DIRECTML.md
-- DIRECTML_CHANGED_FILES_MANIFEST.txt
-
-v13 additions:
-- New OCR engine option: ONNX Runtime DirectML (AMD GPU Experimental)
-- New CLI engine value: --ocr_engine onnx_directml
-- Optional ONNX dependencies in the DirectML extra: onnxruntime-directml and rapidocr-onnxruntime
-- New backend file: CLI/videocr/onnx_directml_ocr.py
-- ONNX backend tries RapidOCR + ONNX Runtime DmlExecutionProvider first
-- If ONNX DirectML is unavailable or fails, it falls back to the working EasyOCR DirectML Hybrid backend instead of crashing
-- Added GUI Last Run Benchmark panel
-- Added [Perf] and [Bench] summary lines for Step 3, end-to-end runtime, and speed vs real-time
+- tools/benchmark_ocr_compare.py
+  - Optional command-line benchmark tool that runs EasyOCR DirectML Hybrid and ONNX DirectML with the same settings and prints a summary.
