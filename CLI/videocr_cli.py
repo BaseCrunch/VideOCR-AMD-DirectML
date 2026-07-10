@@ -118,6 +118,9 @@ def main() -> None:
     parser.add_argument('--post_processing', type=lambda x: x.lower() == 'true', default=False, help='Enable post processing of subtitles (default: false)')
     parser.add_argument('--min_subtitle_duration', type=restricted_float(min_val=0.0), default=0.2, help='Minimum subtitle duration in seconds (default: 0.2)')
     parser.add_argument('--ocr_image_max_width', type=restricted_int(min_val=1), default=720, help='Maximum image width used for OCR (default: 720)')
+    parser.add_argument('--directml_device_index', type=restricted_int(min_val=0), default=None, help='DirectML adapter index for EasyOCR DirectML. On Ryzen+iGPU systems, 1 is often the discrete AMD GPU.')
+    parser.add_argument('--directml_grid_max_width', type=restricted_int(min_val=512), default=2400, help='Maximum stitched OCR grid width for EasyOCR DirectML (default: 2400)')
+    parser.add_argument('--directml_grid_max_height', type=restricted_int(min_val=512), default=2400, help='Maximum stitched OCR grid height for EasyOCR DirectML (default: 2400)')
     parser.add_argument('--crop_x', type=int, default=None, help='(Zone 1) Crop start X')
     parser.add_argument('--crop_y', type=int, default=None, help='(Zone 1) Crop start Y')
     parser.add_argument('--crop_width', type=int, default=None, help='(Zone 1) Crop width')
@@ -140,7 +143,9 @@ def main() -> None:
         if args.ocr_engine == 'easyocr_directml':
             # EasyOCR language support is checked inside the DirectML backend so
             # custom mappings can be added without changing the CLI validator.
-            pass
+            if args.directml_device_index is not None:
+                os.environ["VIDEOCR_DIRECTML_DEVICE_INDEX"] = str(args.directml_device_index)
+                print(f"DirectML adapter requested from CLI: {args.directml_device_index}", flush=True)
 
         if args.time_start and args.time_end:
             start_ms = utils.get_ms_from_time_str(args.time_start)
@@ -203,7 +208,9 @@ def main() -> None:
                 post_processing=args.post_processing,
                 min_subtitle_duration_sec=args.min_subtitle_duration,
                 ocr_image_max_width=args.ocr_image_max_width,
-                subtitle_alignments=[args.subtitle_alignment, args.subtitle_alignment2]
+                subtitle_alignments=[args.subtitle_alignment, args.subtitle_alignment2],
+                directml_grid_max_width=args.directml_grid_max_width,
+                directml_grid_max_height=args.directml_grid_max_height
             )
     except ValueError as e:
         print(f"Error: {e}")

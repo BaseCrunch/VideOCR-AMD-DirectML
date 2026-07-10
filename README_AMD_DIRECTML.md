@@ -242,3 +242,48 @@ python VideOCR.py
 ```
 
 Only use `0` if Windows/torch-directml reports the RX card as adapter 0 on your machine.
+
+## v9 GPU selector + v8 performance / GPU-load tuning
+
+v8 adds practical tuning controls for the working AMD DirectML hybrid backend:
+
+- GUI DirectML GPU dropdown with Refresh button
+- CLI setting for `directml_device_index`
+- GUI/CLI settings for `directml_grid_max_width` and `directml_grid_max_height`
+- DirectML stitched-grid logging
+- Performance timing logs for Step 1 and Step 2
+- Better EasyOCR DirectML progress output
+
+Recommended RX 7900 XTX starting values:
+
+```text
+DirectML GPU: GPU 1: AMD Radeon RX 7900 XTX
+DirectML Grid Max Width: 2400
+DirectML Grid Max Height: 2400
+Frames to Skip: 2 for speed, 1 for accuracy
+Max OCR Image Width: 720 for speed, 960 for accuracy
+Full Frame OCR: off
+Crop: subtitle area only
+```
+
+CLI example:
+
+```bat
+python CLI\videocr_cli.py ^
+  --video_path "C:\path\to\episode.mp4" ^
+  --output "C:\path\to\episode.en.srt" ^
+  --ocr_engine easyocr_directml ^
+  --lang en ^
+  --use_gpu true ^
+  --directml_device_index 1 ^
+  --directml_grid_max_width 2400 ^
+  --directml_grid_max_height 2400 ^
+  --frames_to_skip 2 ^
+  --ocr_image_max_width 720 ^
+  --crop_x 0 ^
+  --crop_y 760 ^
+  --crop_width 1920 ^
+  --crop_height 300
+```
+
+The current DirectML backend is still hybrid: detection runs on the selected DirectML adapter, while recognition stays on CPU to avoid EasyOCR's unsupported LSTM path on `torch-directml`. Raising the grid size can reduce per-image overhead and keep the GPU busier, but it will not make the GPU run at 100% because recognition and subtitle merging are still CPU-side.

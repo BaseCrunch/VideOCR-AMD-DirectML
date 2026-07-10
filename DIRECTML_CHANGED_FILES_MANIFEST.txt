@@ -1,25 +1,19 @@
-VideOCR AMD DirectML changed files v7
+VideOCR AMD DirectML v9 changed files
+=====================================
 
-Copy these files/folders over the matching paths in the VideOCR source tree:
+Changed from v8:
+- VideOCR.py
+  - Adds a real DirectML GPU dropdown in Advanced Settings.
+  - Adds a Refresh button for rescanning Windows display adapters.
+  - Keeps the existing hidden numeric --directml_device_index CLI value synced.
+  - Keeps DirectML grid width/height tuning from v8.
+  - Autosaves DirectML grid settings.
+- README.md
+  - Documents the v9 DirectML GPU dropdown.
+- README_AMD_DIRECTML.md
+  - Documents the v9 DirectML GPU dropdown.
 
-VideOCR.py
-build.py
-pyproject.toml
-run_gui_directml_dev.bat
-README_AMD_DIRECTML.md
-DIRECTML_CHANGED_FILES_MANIFEST.txt
-languages/en.json
-CLI/videocr_cli.py
-CLI/videocr/api.py
-CLI/videocr/video.py
-CLI/videocr/easyocr_directml.py
-tools/test_directml.py
-tools/diagnose_easyocr_directml.py
-tools/run_directml_cli_test.bat
-tools/setup_directml_dev.bat
-
-v7 changes:
-- DirectML adapter selection now prefers adapter index 1 on multi-GPU AMD systems.
-- Supports forcing the DirectML adapter with VIDEOCR_DIRECTML_DEVICE_INDEX.
-- Helper BAT files set VIDEOCR_DIRECTML_DEVICE_INDEX=1 for Ryzen+iGPU + RX 7900 XTX systems.
-- DirectML diagnostics print the selected adapter index.
+Notes:
+- The dropdown is friendly GUI sugar over the same DirectML adapter index used by torch-directml.
+- On the user's Ryzen+iGPU + RX 7900 XTX desktop, GPU 1 should normally be the RX 7900 XTX.
+- Auto still falls back to the existing DirectML adapter candidate logic.

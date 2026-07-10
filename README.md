@@ -387,6 +387,18 @@ The AMD DirectML backend processes OCR in bursts:
 
 Because only part of the OCR pipeline runs on the GPU, GPU usage around `10–40%` can be normal. This does not mean the GPU is unused.
 
+For RX-class GPUs, v8 adds DirectML grid tuning and v9 adds a friendlier DirectML GPU dropdown. Larger stitched grids reduce per-image overhead and can keep the GPU busier during the detection pass. Good starting values are:
+
+```text
+DirectML GPU: GPU 1: AMD Radeon RX 7900 XTX
+DirectML Grid Max Width: 2400
+DirectML Grid Max Height: 2400
+Frames to Skip: 2 for speed, 1 for accuracy
+OCR Image Max Width: 720 for speed, 960 for accuracy
+```
+
+The GUI DirectML GPU selector writes the selected adapter index to the CLI automatically. The GUI also prints performance lines such as Step 1 time, Step 2 EasyOCR DirectML time, filtered frame count, stitched grid count, and average frames per grid.
+
 ## Tips
 
 When cropping, leave a bit of buffer space above and below the subtitle text to improve detection, but do not make the crop box too large.
@@ -401,6 +413,7 @@ A tight crop box around the subtitle area is usually much faster and more accura
 | `frames_to_skip` | Higher number | Lower number | For perfectly accurate timestamps, set this to `0` |
 | `ssim_threshold` | Lower threshold | Higher threshold | Lower values reduce the number of images sent to OCR |
 | `ocr_image_max_width` | Lower value | Higher value | Lower values are faster; higher values help small text |
+| `directml_grid_max_width` / `directml_grid_max_height` | Larger values can reduce overhead | Smaller values use less memory | AMD DirectML mode only |
 | Crop area | Tighter crop | Slight buffer around text | Avoid full-frame OCR unless needed |
 
 ## Command Line Parameters
@@ -647,6 +660,17 @@ set VIDEOCR_DIRECTML_DEVICE_INDEX=1
 ```
 
 may select the discrete GPU on systems with integrated graphics plus an RX 7900 XTX.
+
+### `VIDEOCR_DIRECTML_GRID_MAX_WIDTH` / `VIDEOCR_DIRECTML_GRID_MAX_HEIGHT`
+
+Optional helper values used by the development launcher. The GUI and CLI settings are preferred.
+
+Recommended RX 7900 XTX starting point:
+
+```bat
+set VIDEOCR_DIRECTML_GRID_MAX_WIDTH=2400
+set VIDEOCR_DIRECTML_GRID_MAX_HEIGHT=2400
+```
 
 ### `VIDEOCR_EASYOCR_RECOGNITION_DEVICE`
 

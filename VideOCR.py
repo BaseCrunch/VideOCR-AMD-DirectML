@@ -257,6 +257,8 @@ DEFAULT_TIME_START = "0:00"
 KEY_SEEK_STEP = 1
 CONFIG_FILE = get_config_file_path()
 CONFIG_SECTION = 'Settings'
+DIRECTML_AUTO_OPTION = "Auto (recommended)"
+DIRECTML_GPU_OPTION_PATTERN = re.compile(r"^GPU\s+(\d+)\s*:\s*(.*)$")
 try:
     DEFAULT_DOCUMENTS_DIR = str(pathlib.Path.home() / "Documents")
 except Exception:
@@ -1086,6 +1088,174 @@ def update_gui_scaling_combo(window: sg.Window, selected_index: int | None = Non
         window['gui_scaling'].update(value=display_val, values=translated_names)
 
 
+def _powershell_video_controller_names() -> list[str]:
+    """Return Windows video controller names for the DirectML GPU dropdown.
+
+    DirectML adapter order usually follows the visible Windows display-adapter
+    order, which is also what users see in Task Manager. The names are used for
+    a friendly selector; the numeric adapter index is still what gets passed to
+    torch-directml.
+    """
+    if sys.platform != "win32":
+        return []
+
+    commands = [
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }",
+        ],
+        ["wmic", "path", "win32_VideoController", "get", "name"],
+    ]
+
+    for cmd in commands:
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        except Exception:
+            continue
+
+        lines = []
+        for raw_line in (result.stdout or "").splitlines():
+            line = raw_line.strip()
+            if not line or line.lower() == "name":
+                continue
+            # wmic sometimes pads output or includes carriage artifacts.
+            clean = " ".join(line.split())
+            if clean and clean not in lines:
+                lines.append(clean)
+
+        if lines:
+            return lines
+
+    return []
+
+
+def _torch_directml_adapter_count() -> int | None:
+    """Return the adapter count exposed by torch-directml, if available."""
+    if sys.platform != "win32":
+        return None
+
+    try:
+        import torch_directml  # type: ignore
+    except Exception:
+        return None
+
+    for name in ("device_count", "get_device_count"):
+        fn = getattr(torch_directml, name, None)
+        if callable(fn):
+            try:
+                count = int(fn())
+                if count >= 0:
+                    return count
+            except Exception:
+                pass
+    return None
+
+
+def _torch_directml_adapter_name(index: int) -> str | None:
+    """Return an adapter name from torch-directml when the installed build exposes it."""
+    try:
+        import torch_directml  # type: ignore
+    except Exception:
+        return None
+
+    for name in ("device_name", "get_device_name"):
+        fn = getattr(torch_directml, name, None)
+        if callable(fn):
+            try:
+                value = str(fn(index)).strip()
+                if value:
+                    return value
+            except Exception:
+                pass
+    return None
+
+
+def get_directml_adapter_options() -> list[str]:
+    """Build display options for the DirectML GPU selector."""
+    options = [DIRECTML_AUTO_OPTION]
+
+    gpu_names = _powershell_video_controller_names()
+    dml_count = _torch_directml_adapter_count()
+
+    if dml_count is not None and dml_count > 0:
+        count = dml_count
+    elif gpu_names:
+        count = len(gpu_names)
+    else:
+        # Give users a practical fallback on common Ryzen+iGPU + Radeon dGPU
+        # machines even when detection is unavailable.
+        count = 2 if sys.platform == "win32" else 0
+
+    for idx in range(count):
+        name = _torch_directml_adapter_name(idx)
+        if not name and idx < len(gpu_names):
+            name = gpu_names[idx]
+        if not name:
+            name = "Unknown DirectML adapter"
+        options.append(f"GPU {idx}: {name}")
+
+    return options
+
+
+def directml_option_to_index(option: Any) -> str:
+    """Convert a DirectML GPU combo display value into a CLI adapter index."""
+    text = str(option or "").strip()
+    if not text or text == DIRECTML_AUTO_OPTION:
+        return ""
+
+    match = DIRECTML_GPU_OPTION_PATTERN.match(text)
+    if match:
+        return match.group(1)
+
+    # Also allow users/config files to contain a raw number.
+    if text.isdigit():
+        return text
+
+    return ""
+
+
+def directml_index_to_option(options: list[str], selected_index: Any) -> str:
+    """Pick a DirectML combo display value from a stored numeric index."""
+    selected = str(selected_index or "").strip()
+    if selected:
+        prefix = f"GPU {selected}:"
+        for option in options:
+            if option.startswith(prefix):
+                return option
+        # Keep the numeric selection visible even if adapter-name detection failed.
+        return f"GPU {selected}: Unknown DirectML adapter"
+    return DIRECTML_AUTO_OPTION
+
+
+def refresh_directml_adapter_combo(window: sg.Window, selected_index: Any | None = None) -> None:
+    """Refresh the DirectML GPU dropdown and sync the hidden CLI index input."""
+    if '-DML_ADAPTER_COMBO-' not in window.AllKeysDict:
+        return
+
+    if selected_index is None and '--directml_device_index' in window.AllKeysDict:
+        selected_index = window['--directml_device_index'].get()
+
+    options = get_directml_adapter_options()
+    selected_option = directml_index_to_option(options, selected_index)
+    if selected_option not in options:
+        options.append(selected_option)
+
+    window['-DML_ADAPTER_COMBO-'].update(values=options, value=selected_option)
+
+    if '--directml_device_index' in window.AllKeysDict:
+        window['--directml_device_index'].update(directml_option_to_index(selected_option))
+
+    if '-DML_ADAPTER_STATUS-' in window.AllKeysDict:
+        status = "DirectML GPU selector ready. Use GPU 1 for the RX 7900 XTX on most Ryzen+iGPU desktops."
+        if len(options) <= 1:
+            status = "No DirectML adapters detected yet. Install torch-directml or use Auto/CLI fallback."
+        window['-DML_ADAPTER_STATUS-'].update(status)
+
+
 def get_translated_status(internal_status: str) -> str:
     """Translates internal status codes to display language."""
     lang_key = INTERNAL_STATUS_TO_LANG_KEY.get(internal_status)
@@ -1111,6 +1281,9 @@ def get_default_settings() -> dict[str, Any]:
     '--brightness_threshold': '',
     '--ssim_threshold': str(DEFAULT_SSIM_THRESHOLD),
     '--ocr_image_max_width': str(DEFAULT_OCR_IMAGE_MAX_WIDTH),
+    '--directml_device_index': '1',
+    '--directml_grid_max_width': '2400',
+    '--directml_grid_max_height': '2400',
     '--frames_to_skip': str(DEFAULT_FRAMES_TO_SKIP),
     '--use_fullframe': False,
     '--use_gpu': True,
@@ -1244,6 +1417,9 @@ def load_settings(window: sg.Window) -> None:
                     ('--brightness_threshold', 'input'),
                     ('--ssim_threshold', 'input'),
                     ('--ocr_image_max_width', 'input'),
+                    ('--directml_device_index', 'input'),
+                    ('--directml_grid_max_width', 'input'),
+                    ('--directml_grid_max_height', 'input'),
                     ('--frames_to_skip', 'input'),
                     ('--use_fullframe', 'checkbox'),
                     ('--use_gpu', 'checkbox'),
@@ -1718,6 +1894,9 @@ def get_processing_args(values: dict[str, Any], window: sg.Window) -> tuple[dict
         '--brightness_threshold': (int, 0, 255, "Brightness Threshold"),
         '--ssim_threshold': (int, 0, 100, "SSIM Threshold"),
         '--ocr_image_max_width': (int, 0, None, "Max OCR Image Width"),
+        '--directml_device_index': (int, 0, None, "DirectML Adapter Index"),
+        '--directml_grid_max_width': (int, 512, None, "DirectML Grid Max Width"),
+        '--directml_grid_max_height': (int, 512, None, "DirectML Grid Max Height"),
         '--frames_to_skip': (int, 0, None, "Frames to Skip"),
         '--max_merge_gap': (float, 0.0, None, "Max Merge Gap"),
         '--min_subtitle_duration': (float, 0.0, None, "Minimum Subtitle Duration"),
@@ -2449,6 +2628,15 @@ tab2_content = [
     [sg.Text("Minimum Subtitle Duration (seconds):", size=(38, 1), key='-LBL-MIN_DURATION-'),
      sg.Input(DEFAULT_MIN_SUBTITLE_DURATION, key="--min_subtitle_duration", size=(10, 1), enable_events=True)],
     [sg.Checkbox("Enable GPU Usage", default=True, key="--use_gpu", enable_events=True)],
+    [sg.Text("DirectML GPU:", size=(38, 1), key='-LBL-DML_DEVICE-'),
+     sg.Combo([DIRECTML_AUTO_OPTION], default_value=DIRECTML_AUTO_OPTION, key="-DML_ADAPTER_COMBO-", size=(42, 1), readonly=True, enable_events=True),
+     sg.Button("Refresh", key="-BTN-DML-REFRESH-"),
+     sg.Input('1', key="--directml_device_index", visible=False, enable_events=True)],
+    [sg.Text("", key="-DML_ADAPTER_STATUS-", size=(80, 1), text_color="#b8b8b8")],
+    [sg.Text("DirectML Grid Max Width:", size=(38, 1), key='-LBL-DML_GRID_W-'),
+     sg.Input('2400', key="--directml_grid_max_width", size=(10, 1), enable_events=True)],
+    [sg.Text("DirectML Grid Max Height:", size=(38, 1), key='-LBL-DML_GRID_H-'),
+     sg.Input('2400', key="--directml_grid_max_height", size=(10, 1), enable_events=True)],
     [sg.Checkbox("Use Full Frame OCR", default=False, key="--use_fullframe", enable_events=True)],
     [sg.Checkbox("Enable Dual Zone OCR", default=False, key="--use_dual_zone", enable_events=True)],
     [sg.Checkbox("Enable Subtitle Alignment", default=False, key="enable_subtitle_alignment", enable_events=True)],
@@ -2644,6 +2832,7 @@ else:
 
 # --- Load settings when the application starts ---
 load_settings(window)
+refresh_directml_adapter_combo(window)
 
 update_gui_text(window)
 
@@ -2863,6 +3052,8 @@ KEYS_TO_AUTOSAVE = [
     '--brightness_threshold',
     '--ssim_threshold',
     '--ocr_image_max_width',
+    '--directml_grid_max_width',
+    '--directml_grid_max_height',
     '--frames_to_skip',
     '--use_fullframe',
     '--use_gpu',
@@ -2996,6 +3187,17 @@ while True:
                 graph.erase()
                 graph.draw_image(data=current_image_bytes, location=(image_offset_x, image_offset_y))
             save_settings(window, values)
+
+        if event == '-DML_ADAPTER_COMBO-':
+            selected_index = directml_option_to_index(values.get('-DML_ADAPTER_COMBO-', DIRECTML_AUTO_OPTION))
+            window['--directml_device_index'].update(selected_index)
+            values['--directml_device_index'] = selected_index
+            save_settings(window, values)
+
+        elif event == '-BTN-DML-REFRESH-':
+            refresh_directml_adapter_combo(window, values.get('--directml_device_index', ''))
+            refreshed_values = window.read(timeout=0)[1]
+            save_settings(window, refreshed_values)
 
         # --- Handle possible output path change ---
         if event == '--save_in_video_dir':
@@ -3181,7 +3383,10 @@ while True:
             "• Requires an active internet connection.\n\n"
             "EasyOCR DirectML (AMD GPU):\n"
             "• Experimental local DirectML backend for Windows AMD GPUs.\n"
-            "• Uses EasyOCR for detection and recognition.\n"
+            "• Uses a stable hybrid mode: DirectML/AMD GPU for detection and CPU for recognition.\n"
+            "• DirectML GPU dropdown selects the adapter; on Ryzen+iGPU desktops, GPU 1 is often the discrete RX card.\n"
+            "• The Refresh button rescans available Windows display adapters.\n"
+            "• DirectML Grid Max Width/Height can be raised to feed larger batches to the GPU.\n"
             "• Requires easyocr and torch-directml.")),
             icon=ICON_PATH
         )

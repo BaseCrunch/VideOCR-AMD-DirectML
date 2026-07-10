@@ -8,6 +8,7 @@ import queue
 import re
 import shutil
 import threading
+import time
 from typing import Any, cast
 
 import av
@@ -61,7 +62,10 @@ class Video:
 
     def run_ocr(self, use_gpu: bool, ocr_engine: str, lang: str, use_angle_cls: bool, time_start: str, time_end: str, conf_threshold: int,
                 use_fullframe: bool, brightness_threshold: int | None, ssim_threshold: int, subtitle_position: str, frames_to_skip: int,
-                crop_zones: list[dict[str, int]], ocr_image_max_width: int, normalize_to_simplified_chinese: bool) -> None:
+                crop_zones: list[dict[str, int]], ocr_image_max_width: int, normalize_to_simplified_chinese: bool,
+                directml_grid_max_width: int = 2400, directml_grid_max_height: int = 2400) -> None:
+        perf_total_start = time.perf_counter()
+        step1_start = perf_total_start
         conf_threshold_ratio = conf_threshold / 100
         ssim_threshold_ratio = ssim_threshold / 100
         self.lang = lang
@@ -356,10 +360,24 @@ class Video:
                 t.start()
                 writers.append(t)
 
-            MAX_STITCH_WIDTH = 1500
-            MAX_STITCH_HEIGHT = 1500
+            DEFAULT_STITCH_WIDTH = 1500
+            DEFAULT_STITCH_HEIGHT = 1500
+            MAX_STITCH_WIDTH = DEFAULT_STITCH_WIDTH
+            MAX_STITCH_HEIGHT = DEFAULT_STITCH_HEIGHT
+
+            if ocr_engine == "easyocr_directml":
+                try:
+                    MAX_STITCH_WIDTH = max(512, int(directml_grid_max_width or 2400))
+                    MAX_STITCH_HEIGHT = max(512, int(directml_grid_max_height or 2400))
+                except Exception:
+                    MAX_STITCH_WIDTH = 2400
+                    MAX_STITCH_HEIGHT = 2400
+
             GRID_SPACING = 10
             FILENAME_ZERO_PADDING = 8
+
+            if ocr_engine == "easyocr_directml":
+                print(f"DirectML stitched grid target: {MAX_STITCH_WIDTH}x{MAX_STITCH_HEIGHT}px", flush=True)
 
             batch_limits: dict[int, int] = {}
             for z_idx, z in enumerate(self.validated_zones):
@@ -500,6 +518,8 @@ class Video:
 
             ocr_end = expected_index if expected_index is not None else 0
 
+            step1_end = time.perf_counter()
+
             if len(self.frame_timestamps) > 1:
                 min_idx = min(self.frame_timestamps.keys())
                 max_idx = max(self.frame_timestamps.keys())
@@ -508,6 +528,8 @@ class Video:
                     self.avg_frame_duration_ms = total_duration / (max_idx - min_idx)
 
             if det_counter == 0:
+                print(f"[Perf] Step 1 frame scan/filter/stitch: {step1_end - step1_start:.2f}s", flush=True)
+                print("[Perf] No frames survived OCR filtering. Nothing to recognize.", flush=True)
                 return
 
             if ocr_engine == "easyocr_directml":
@@ -520,18 +542,22 @@ class Video:
 
                 total_stitched_frames = sum(len(mappings) for mappings in det_stitch_map.values())
                 total_grids = len(det_stitch_map)
+                avg_frames_per_grid = total_stitched_frames / total_grids if total_grids else 0.0
                 print(
                     f"Running EasyOCR DirectML pass on {total_stitched_frames} filtered frame(s) "
-                    f"stitched into {total_grids} image grid(s)...",
+                    f"stitched into {total_grids} image grid(s) "
+                    f"({avg_frames_per_grid:.1f} frame(s)/grid)...",
                     flush=True
                 )
 
+                directml_ocr_start = time.perf_counter()
                 ocr_outputs = run_easyocr_on_stitched_images(
                     det_stitched_dir,
                     det_stitch_map,
                     self.lang,
                     use_gpu
                 )
+                directml_ocr_end = time.perf_counter()
 
                 active_frame_coords: set[tuple[int, int]] = set()
                 for mappings in det_stitch_map.values():
@@ -567,6 +593,12 @@ class Video:
 
                 self.pred_frames_zone1 = frame_predictions_list.get(0, [])
                 self.pred_frames_zone2 = frame_predictions_list.get(1, [])
+
+                total_elapsed = time.perf_counter() - perf_total_start
+                print(f"[Perf] Step 1 frame scan/filter/stitch: {step1_end - step1_start:.2f}s", flush=True)
+                print(f"[Perf] Step 2 EasyOCR DirectML hybrid OCR: {directml_ocr_end - directml_ocr_start:.2f}s", flush=True)
+                print(f"[Perf] Filtered OCR frames: {total_stitched_frames}; stitched grids: {total_grids}; average frames/grid: {avg_frames_per_grid:.1f}", flush=True)
+                print(f"[Perf] Total OCR preparation/runtime before subtitle merge: {total_elapsed:.2f}s", flush=True)
                 return
 
             # --------------------------------------------------------
@@ -945,6 +977,10 @@ class Video:
 
             self.pred_frames_zone1 = frame_predictions_list.get(0, [])
             self.pred_frames_zone2 = frame_predictions_list.get(1, [])
+
+            total_elapsed = time.perf_counter() - perf_total_start
+            print(f"[Perf] Step 1 frame scan/filter/stitch: {step1_end - step1_start:.2f}s", flush=True)
+            print(f"[Perf] Total OCR preparation/runtime before subtitle merge: {total_elapsed:.2f}s", flush=True)
 
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)

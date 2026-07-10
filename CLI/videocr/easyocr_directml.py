@@ -375,6 +375,8 @@ def run_easyocr_on_stitched_images(
 
     engine_name = "EasyOCR DirectML hybrid" if use_gpu else "EasyOCR"
     print(f"Starting {engine_name}...", flush=True)
+    if use_gpu:
+        print("DirectML hybrid note: detector runs on the selected AMD/DirectML adapter; EasyOCR text recognition stays on CPU for LSTM compatibility.", flush=True)
 
     for index, filename in enumerate(filenames, 1):
         image_path = os.path.join(input_dir, filename)
@@ -406,7 +408,7 @@ def run_easyocr_on_stitched_images(
                 key = (int(meta["frame_idx"]), int(meta["zone_idx"]))
                 outputs.setdefault(key, []).append([adjusted_poly, (text, confidence)])
 
-        print(f"\rStep 2/2: Performing OCR on image {index} of {total}", end="", flush=True)
+        print(f"\rStep 2/3: Performing Text-Detection on image {index} of {total}", end="", flush=True)
 
     print()
     return outputs

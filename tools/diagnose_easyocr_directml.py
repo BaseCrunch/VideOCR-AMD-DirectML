@@ -50,11 +50,13 @@ def main() -> int:
         return 1
 
     try:
+        import os
         import torch
-        import torch_directml
-        device = torch_directml.device()
+        from CLI.videocr.easyocr_directml import get_directml_device
+        print("\nRequested DirectML adapter index:", os.environ.get("VIDEOCR_DIRECTML_DEVICE_INDEX", "auto"))
+        device = get_directml_device()
         x = torch.tensor([1.0]).to(device)
-        print("\nDirectML tensor test:", float((x + 2).cpu().item()))
+        print("DirectML tensor test:", float((x + 2).cpu().item()))
         print("DirectML device:", device)
     except Exception:
         print("\nDirectML tensor test failed:")
