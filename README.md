@@ -935,3 +935,32 @@ The ONNX engine is experimental and safely falls back to EasyOCR DirectML Hybrid
 ### AMD DirectML v14 experimental tuning
 
 This fork includes an experimental AMD DirectML path. v14 adds ONNX Runtime DirectML tuning controls and an optional benchmark comparison between ONNX DirectML and EasyOCR DirectML Hybrid. For RX 7900 XTX testing, use ONNX DirectML tuning set to **Balanced ONNX** first to reduce excessive VRAM reservation, then try **Max Throughput** if it is stable.
+
+### AMD DirectML v16.1 tested preset
+
+v16.1 updates the one-click **Apply Tested AMD Preset** button for the RX 7900 XTX benchmark winner:
+
+```text
+OCR Engine: EasyOCR DirectML (AMD GPU)
+AMD Frame Scan Mode: AMD FFmpeg D3D11VA Decode + DirectML SSIM
+DirectML Recognition Mode: Stable Hybrid (recommended)
+DirectML Grid: 4096x4096
+Frames to Skip: 1
+Max OCR Image Width: 720
+```
+
+This preset is based on the measured fastest sample result: EasyOCR DirectML Hybrid at 122.48s total / 11.85x real-time on the EP86S 3-minute benchmark sample. v16.1 also prevents ONNX tuning events from changing the EasyOCR preset grid back to 2048x2048.
+
+
+### AMD DirectML v16.2 - Apply Tested AMD Preset button event fix
+
+v16.2 fixes the GUI button event for **Apply Tested AMD Preset**. The v16.1 preset values were correct, but the button key was not included in the handled event list, so clicking the button could fail to force the visible settings. v16.2 makes the button immediately apply the benchmark-backed RX 7900 XTX preset:
+
+- OCR Engine: EasyOCR DirectML (AMD GPU)
+- DirectML GPU: GPU 1
+- AMD Performance Preset: Max AMD GPU Load
+- DirectML Recognition Mode: Stable Hybrid (recommended)
+- AMD Frame Scan Mode: AMD FFmpeg D3D11VA Decode + DirectML SSIM
+- DirectML Grid Max Width/Height: 4096 x 4096
+- Frames to Skip: 1
+- Max OCR Image Width: 720

@@ -1310,6 +1310,91 @@ def onnx_tuning_from_cli(value: Any) -> str:
     return ONNX_DIRECTML_TUNING_FROM_CLI.get(text, "Balanced ONNX (recommended)")
 
 
+TESTED_AMD_PRESET = {
+    'ocr_engine': 'EasyOCR DirectML (AMD GPU)',
+    'language_group': 'easyocr',
+    'use_gpu': True,
+    'directml_device_index': '1',
+    'directml_performance_preset': 'Max AMD GPU Load',
+    'directml_recognition_mode': 'Stable Hybrid (recommended)',
+    'directml_frame_scan_mode': 'AMD FFmpeg D3D11VA Decode + DirectML SSIM (prototype)',
+    'onnx_directml_tuning': 'Balanced ONNX (recommended)',
+    'directml_grid_max_width': '4096',
+    'directml_grid_max_height': '4096',
+    'frames_to_skip': '1',
+    'ocr_image_max_width': '720',
+}
+
+
+def _safe_update_value(window: sg.Window, key: str, value: Any) -> None:
+    """Update a PySimpleGUI element using either modern or legacy value syntax."""
+    if key not in window.AllKeysDict:
+        return
+    try:
+        window[key].update(value=value)
+    except TypeError:
+        window[key].update(value)
+
+
+def apply_tested_amd_preset(window: sg.Window) -> None:
+    """Apply the fastest benchmark-backed AMD preset from the RX 7900 XTX v15/v16 tests.
+
+    v16.2 intentionally handles the preset button as a saved-settings event and re-applies the grid/recognition fields last so generated
+    Combo events from ONNX tuning cannot leave the visible UI at 2048 or AMD Max Auto.
+    """
+    # OCR engine first. This also ensures later ONNX-tuning events know EasyOCR is active.
+    if '-OCR_ENGINE_COMBO-' in window.AllKeysDict:
+        window['-OCR_ENGINE_COMBO-'].update(values=OCR_ENGINES, value=TESTED_AMD_PRESET['ocr_engine'])
+
+    # EasyOCR/ONNX DirectML engines use the EasyOCR language list. Keep English if present.
+    if '-LANG_COMBO-' in window.AllKeysDict:
+        current_lang = window['-LANG_COMBO-'].get() if hasattr(window['-LANG_COMBO-'], 'get') else DEFAULT_SUBTITLE_LANGUAGE
+        new_lang = current_lang if current_lang in easyocr_display_names else DEFAULT_SUBTITLE_LANGUAGE
+        window['-LANG_COMBO-'].update(values=easyocr_display_names, value=new_lang)
+
+    updates = {
+        '--use_gpu': True,
+        '--directml_device_index': TESTED_AMD_PRESET['directml_device_index'],
+        '--directml_performance_preset': TESTED_AMD_PRESET['directml_performance_preset'],
+        '--directml_recognition_mode': TESTED_AMD_PRESET['directml_recognition_mode'],
+        '--directml_frame_scan_mode': TESTED_AMD_PRESET['directml_frame_scan_mode'],
+        '--onnx_directml_tuning': TESTED_AMD_PRESET['onnx_directml_tuning'],
+        '--frames_to_skip': TESTED_AMD_PRESET['frames_to_skip'],
+        '--ocr_image_max_width': TESTED_AMD_PRESET['ocr_image_max_width'],
+        '--benchmark_compare_engine': False,
+        '--benchmark_compare_sample_grids': '3',
+        '--use_fullframe': False,
+        '--use_angle_cls': False,
+        '--post_processing': False,
+        '--use_server_model': False,
+    }
+    for key, value in updates.items():
+        _safe_update_value(window, key, value)
+
+    if '-DML_ADAPTER_COMBO-' in window.AllKeysDict:
+        options = list(getattr(window['-DML_ADAPTER_COMBO-'], 'Values', []) or [])
+        gpu1_option = directml_index_to_option(options, TESTED_AMD_PRESET['directml_device_index'])
+        if gpu1_option not in options:
+            options.append(gpu1_option)
+        window['-DML_ADAPTER_COMBO-'].update(values=options, value=gpu1_option)
+        _safe_update_value(window, '--directml_device_index', TESTED_AMD_PRESET['directml_device_index'])
+
+    # Force these last. ONNX tuning is visible for comparisons, but the tested EasyOCR
+    # preset must keep the 4096 grid and stable hybrid recognition.
+    _safe_update_value(window, '--directml_recognition_mode', TESTED_AMD_PRESET['directml_recognition_mode'])
+    _safe_update_value(window, '--directml_grid_max_width', TESTED_AMD_PRESET['directml_grid_max_width'])
+    _safe_update_value(window, '--directml_grid_max_height', TESTED_AMD_PRESET['directml_grid_max_height'])
+
+    if '-LBL-AMD-PRESET-NOTE-' in window.AllKeysDict:
+        window['-LBL-AMD-PRESET-NOTE-'].update('v16.2: EasyOCR DirectML Hybrid + 4096 grid + D3D11VA scan')
+
+    if '-OUTPUT-' in window.AllKeysDict:
+        window['-OUTPUT-'].update(
+            "[Preset] Applied tested AMD preset: EasyOCR DirectML Hybrid + 4096 grid + FFmpeg D3D11VA scan.\n",
+            append=True,
+        )
+
+
 def directml_index_to_option(options: list[str], selected_index: Any) -> str:
     """Pick a DirectML combo display value from a stored numeric index."""
     selected = str(selected_index or "").strip()
@@ -2769,6 +2854,8 @@ tab2_content = [
      sg.Combo(DIRECTML_FRAME_SCAN_DISPLAY, default_value="CPU SSIM (compatible)", key="--directml_frame_scan_mode", size=(42, 1), readonly=True, enable_events=True)],
     [sg.Text("ONNX DirectML Tuning:", size=(38, 1), key='-LBL-ONNX_TUNING-'),
      sg.Combo(ONNX_DIRECTML_TUNING_DISPLAY, default_value="Balanced ONNX (recommended)", key="--onnx_directml_tuning", size=(42, 1), readonly=True, enable_events=True)],
+    [sg.Button("Apply Tested AMD Preset", key="-BTN-AMD-APPLY-RECOMMENDED-"),
+     sg.Text("v16.2: EasyOCR DirectML Hybrid + 4096 grid + D3D11VA scan", key="-LBL-AMD-PRESET-NOTE-", text_color="#b8b8b8")],
     [sg.Checkbox("Benchmark Compare ONNX vs EasyOCR sample", default=False, key="--benchmark_compare_engine", enable_events=True)],
     [sg.Text("Benchmark Compare Sample Grids:", size=(38, 1), key='-LBL-BENCH_COMPARE_GRIDS-'),
      sg.Input('3', key="--benchmark_compare_sample_grids", size=(10, 1), enable_events=True)],
@@ -3179,6 +3266,7 @@ if not save_in_video_dir_checked_at_start:
 
 # --- Define the list of keys that, when changed, should trigger a settings save ---
 KEYS_TO_AUTOSAVE = [
+    '-BTN-AMD-APPLY-RECOMMENDED-',
     '-UI_LANG_COMBO-',
     '-OCR_ENGINE_COMBO-',
     '-LANG_COMBO-',
@@ -3354,6 +3442,16 @@ while True:
             refreshed_values = window.read(timeout=0)[1]
             save_settings(window, refreshed_values)
 
+        elif event == '-BTN-AMD-APPLY-RECOMMENDED-':
+            apply_tested_amd_preset(window)
+            # Read once to refresh the values snapshot, then force the tested fields again.
+            # This prevents queued Combo events from visually reverting the preset to
+            # ONNX Balanced's 2048 grid or AMD Max Auto.
+            refreshed_values = window.read(timeout=0)[1]
+            apply_tested_amd_preset(window)
+            refreshed_values = window.read(timeout=0)[1]
+            save_settings(window, refreshed_values)
+
         elif event == '--directml_performance_preset':
             preset = directml_preset_to_cli(values.get('--directml_performance_preset', 'balanced'))
             if preset == 'compatibility':
@@ -3376,15 +3474,19 @@ while True:
 
         elif event == '--onnx_directml_tuning':
             tuning = onnx_tuning_to_cli(values.get('--onnx_directml_tuning', 'balanced'))
-            if tuning == 'low_vram':
-                window['--directml_grid_max_width'].update('1600')
-                window['--directml_grid_max_height'].update('1600')
-            elif tuning == 'balanced':
-                window['--directml_grid_max_width'].update('2048')
-                window['--directml_grid_max_height'].update('2048')
-            elif tuning == 'max':
-                window['--directml_grid_max_width'].update('3072')
-                window['--directml_grid_max_height'].update('3072')
+            selected_engine_for_tuning = values.get('-OCR_ENGINE_COMBO-', DEFAULT_OCR_ENGINE)
+            # ONNX tuning should only resize the grid when the ONNX engine is active.
+            # With EasyOCR DirectML, the tested RX 7900 XTX preset is 4096x4096.
+            if "ONNX Runtime DirectML" in selected_engine_for_tuning:
+                if tuning == 'low_vram':
+                    window['--directml_grid_max_width'].update('1600')
+                    window['--directml_grid_max_height'].update('1600')
+                elif tuning == 'balanced':
+                    window['--directml_grid_max_width'].update('2048')
+                    window['--directml_grid_max_height'].update('2048')
+                elif tuning == 'max':
+                    window['--directml_grid_max_width'].update('3072')
+                    window['--directml_grid_max_height'].update('3072')
             refreshed_values = window.read(timeout=0)[1]
             save_settings(window, refreshed_values)
 

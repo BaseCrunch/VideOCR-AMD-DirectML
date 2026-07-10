@@ -499,3 +499,62 @@ Optional standalone benchmark compare tool:
 ```bat
 python tools\benchmark_ocr_compare.py "C:\path\to\video.mp4" --crop 0:793:1920:287 --frames-to-skip 1 --onnx-directml-tuning balanced
 ```
+
+## v15/v16/v16.1 - AMD preset auto-benchmark and one-click tested preset
+
+v15 adds a small auto-tune benchmark tool and a GUI shortcut. v16 updates the shortcut using the actual RX 7900 XTX benchmark result: EasyOCR DirectML Hybrid was fastest on the 3-minute EP86S sample, while ONNX remains available as an experimental alternative. v16.1 fixes the GUI shortcut so the visible fields are forced to the tested EasyOCR preset, including Stable Hybrid and a 4096x4096 grid.
+
+### GUI quick preset
+
+Open **Advanced Settings** and click:
+
+```text
+Apply Tested AMD Preset
+```
+
+It applies the fastest current tested preset. In v16.1, the button also protects the 4096x4096 EasyOCR grid from being overwritten by ONNX tuning events:
+
+```text
+OCR Engine: EasyOCR DirectML (AMD GPU)
+DirectML GPU: GPU 1: AMD Radeon RX 7900 XTX
+AMD Performance Preset: Max AMD GPU Load
+DirectML Recognition Mode: Stable Hybrid
+AMD Frame Scan Mode: AMD FFmpeg D3D11VA Decode + DirectML SSIM
+DirectML Grid: 4096x4096
+Frames to Skip: 1
+Max OCR Image Width: 720
+```
+
+Benchmark result used for this default:
+
+```text
+#1 EasyOCR DirectML Hybrid: 122.48s, 11.85x real-time, Step2 96.33s, 29 grids
+#2 ONNX Balanced + Stable Hybrid: 126.86s, 11.44x real-time, Step2 101.75s, 145 grids
+#3 ONNX Balanced + AMD Max Auto: 131.77s, 11.01x real-time, Step2 106.66s, 145 grids
+```
+
+### Auto-tune benchmark tool
+
+Run this from the project folder after installing the DirectML environment:
+
+```bat
+.venv\Scripts\python.exe tools\benchmark_amd_presets.py "C:\path\to\video.mp4" --crop 0,793,1920,287 --seconds 180 --device-index 1 --keep-logs
+```
+
+The tool tests multiple presets, parses the `[Bench]` and `[Perf]` output, and prints a fastest-to-slowest ranking. If it is accidentally launched with system Python, v16+ automatically prefers `.venv\Scripts\python.exe` for the CLI subprocesses when that venv exists.
+
+Use `--seconds 300` for a longer, more representative sample.
+
+
+### AMD DirectML v16.2 - Apply Tested AMD Preset button event fix
+
+v16.2 fixes the GUI button event for **Apply Tested AMD Preset**. The v16.1 preset values were correct, but the button key was not included in the handled event list, so clicking the button could fail to force the visible settings. v16.2 makes the button immediately apply the benchmark-backed RX 7900 XTX preset:
+
+- OCR Engine: EasyOCR DirectML (AMD GPU)
+- DirectML GPU: GPU 1
+- AMD Performance Preset: Max AMD GPU Load
+- DirectML Recognition Mode: Stable Hybrid (recommended)
+- AMD Frame Scan Mode: AMD FFmpeg D3D11VA Decode + DirectML SSIM
+- DirectML Grid Max Width/Height: 4096 x 4096
+- Frames to Skip: 1
+- Max OCR Image Width: 720

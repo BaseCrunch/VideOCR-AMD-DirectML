@@ -1,43 +1,39 @@
-VideOCR AMD DirectML v14 changed files
-=====================================
+VideOCR AMD DirectML v16.2 Changed Files Manifest
+=================================================
 
-v14 goal:
-- Tune the experimental ONNX Runtime DirectML backend so it does not always use huge 4096x4096 OCR grids.
-- Add visible ONNX tuning controls to the GUI.
-- Add optional EasyOCR-vs-ONNX benchmark comparison output.
-- Keep the working v12/v13 AMD paths intact.
+Purpose
+-------
+- Fix the Apply Tested AMD Preset button event not firing in the GUI event loop.
+- The previous v16.1 UI fields could already display the right values if they were saved, but the button itself was not included in the autosave/event branch that handled the preset action.
+- v16.2 adds the button key to the handled event list so clicking it actually forces the tested AMD preset immediately.
 
-Changed files:
+Changed files
+-------------
 - VideOCR.py
-  - Adds ONNX DirectML Tuning dropdown: Low VRAM / Balanced / Max Throughput / Manual.
-  - Adds optional Benchmark Compare ONNX vs EasyOCR sample checkbox and sample-grid input.
-  - Shows [BenchCompare] lines in the Last Run Benchmark panel.
-  - Converts ONNX tuning display values to CLI values.
+  - Adds -BTN-AMD-APPLY-RECOMMENDED- to KEYS_TO_AUTOSAVE so the preset button event reaches the existing apply_tested_amd_preset() handler.
+  - Updates the preset label to v16.2.
+  - Keeps the winning RX 7900 XTX preset:
+    * OCR Engine: EasyOCR DirectML (AMD GPU)
+    * DirectML GPU: GPU 1
+    * AMD Performance Preset: Max AMD GPU Load
+    * DirectML Recognition Mode: Stable Hybrid (recommended)
+    * AMD Frame Scan Mode: AMD FFmpeg D3D11VA Decode + DirectML SSIM
+    * DirectML Grid Max Width: 4096
+    * DirectML Grid Max Height: 4096
+    * Frames to Skip: 1
+    * Max OCR Image Width: 720
 
-- CLI/videocr_cli.py
-  - Adds --onnx_directml_tuning low_vram|balanced|max|manual.
-  - Adds --benchmark_compare_engine true|false.
-  - Adds --benchmark_compare_sample_grids N.
-
-- CLI/videocr/api.py
-  - Passes ONNX tuning and benchmark compare flags into Video.run_ocr.
-  - Includes ONNX tuning in the final [Bench] line.
-
-- CLI/videocr/video.py
-  - Adds ONNX-specific stitched grid tuning:
-    low_vram = 1600x1600
-    balanced = 2048x2048
-    max = 3072x3072
-    manual = the visible grid boxes
-  - Keeps EasyOCR Max AMD path at 4096x4096.
-  - Adds optional EasyOCR Hybrid sample benchmark after the ONNX run.
-  - Prints ONNX tuning and grid target in [Perf] output.
-
-- CLI/videocr/onnx_directml_ocr.py
-  - Adds tuning-aware ONNX Runtime session option attempts.
-  - Reports ONNX providers, selected provider order, tuning mode, and RapidOCR kwargs.
-  - Adds per-grid ONNX OCR timing summary.
-  - Keeps safe fallback to EasyOCR DirectML Hybrid.
-
-- tools/benchmark_ocr_compare.py
-  - Optional command-line benchmark tool that runs EasyOCR DirectML Hybrid and ONNX DirectML with the same settings and prints a summary.
+Recommended v16.2 verification
+------------------------------
+1. Open VideOCR.py.
+2. Go to Advanced Settings.
+3. Change a few fields away from the target values, for example:
+   - DirectML Recognition Mode: AMD Max Auto
+   - DirectML Grid Max Width: 2048
+   - DirectML Grid Max Height: 2048
+4. Click Apply Tested AMD Preset.
+5. Confirm the visible fields immediately change to:
+   - Stable Hybrid (recommended)
+   - 4096
+   - 4096
+6. Go to Process Video and confirm OCR Engine is EasyOCR DirectML (AMD GPU).
