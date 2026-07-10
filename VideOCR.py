@@ -31,6 +31,7 @@ import os
 import pathlib
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -173,14 +174,41 @@ def send_notification(title: str, message: str) -> None:
 
 
 # --- Determine VideOCR location ---
-def find_videocr_program() -> str | None:
-    """Determines the path to the videocr-cli executable (.exe or .bin)."""
+def find_videocr_program() -> str | list[str] | None:
+    """Determines how to start the videocr-cli worker.
+
+    Installed/Nuitka builds place videocr-cli.exe next to VideOCR.exe.
+    Source/dev runs do not have that exe yet, so fall back to the current
+    Python interpreter and CLI/videocr_cli.py. This lets `python VideOCR.py`
+    work from an editable DirectML dev checkout without building the CLI first.
+    """
     program_name = 'videocr-cli'
     extension = ".exe" if sys.platform == "win32" else ".bin"
 
-    root_path = os.path.join(APP_DIR, f'{program_name}{extension}')
-    if os.path.exists(root_path):
-        return root_path
+    candidates = [
+        os.path.join(APP_DIR, f'{program_name}{extension}'),
+    ]
+
+    if sys.platform == "win32":
+        candidates.extend([
+            os.path.join(APP_DIR, '.venv', 'Scripts', f'{program_name}.exe'),
+            os.path.join(APP_DIR, 'venv', 'Scripts', f'{program_name}.exe'),
+        ])
+
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+
+    path_candidate = shutil.which(f'{program_name}{extension}') or shutil.which(program_name)
+    if path_candidate:
+        return path_candidate
+
+    # Dev/source fallback. When run this way, sys.executable points at the
+    # active venv Python, so DirectML/EasyOCR dependencies stay available.
+    cli_script = os.path.join(APP_DIR, 'CLI', 'videocr_cli.py')
+    cli_package = os.path.join(APP_DIR, 'CLI', 'videocr')
+    if os.path.isfile(cli_script) and os.path.isdir(cli_package):
+        return [sys.executable, cli_script]
 
     return None
 
@@ -352,9 +380,38 @@ GOOGLE_LENS_LANGUAGES_LIST.sort(key=lambda x: x[0])
 lens_display_names = [lang[0] for lang in GOOGLE_LENS_LANGUAGES_LIST]
 lens_abbr_lookup = {name: abbr for name, abbr in GOOGLE_LENS_LANGUAGES_LIST}
 
+EASYOCR_LANGUAGES_LIST = [
+    ('English', 'en'),
+    ('Japanese + English', 'japan'),
+    ('Korean + English', 'korean'),
+    ('Chinese Simplified + English', 'ch'),
+    ('Chinese Traditional + English', 'chinese_cht'),
+    ('German + English', 'german'),
+    ('French + English', 'fr'),
+    ('Spanish + English', 'es'),
+    ('Italian + English', 'it'),
+    ('Portuguese + English', 'pt'),
+    ('Russian + English', 'ru'),
+    ('Arabic + English', 'ar'),
+    ('Indonesian + English', 'id'),
+    ('Thai + English', 'th'),
+    ('Vietnamese + English', 'vi'),
+]
+easyocr_display_names = [lang[0] for lang in EASYOCR_LANGUAGES_LIST]
+easyocr_abbr_lookup = {name: abbr for name, abbr in EASYOCR_LANGUAGES_LIST}
+
+EASY_TO_ISO_MAP = {
+    'japan': 'ja',
+    'korean': 'ko',
+    'ch': 'zh',
+    'chinese_cht': 'zh',
+    'german': 'de',
+}
+
 OCR_ENGINES = [
     'PaddleOCR (Det. + Rec.)',
-    'PaddleOCR (Det.) + Google Lens (Rec.)'
+    'PaddleOCR (Det.) + Google Lens (Rec.)',
+    'EasyOCR DirectML (AMD GPU)'
 ]
 
 # Mapping from PaddleOCR internal codes to standard ISO 639 codes for deviating abbreviations
@@ -1169,7 +1226,12 @@ def load_settings(window: sg.Window) -> None:
                 saved_engine = config.get(CONFIG_SECTION, '-OCR_ENGINE_COMBO-', fallback=DEFAULT_OCR_ENGINE)
                 window['-OCR_ENGINE_COMBO-'].update(value=saved_engine)
 
-                active_lang_list = lens_display_names if "Google Lens" in saved_engine else paddle_display_names
+                if "Google Lens" in saved_engine:
+                    active_lang_list = lens_display_names
+                elif "EasyOCR DirectML" in saved_engine:
+                    active_lang_list = easyocr_display_names
+                else:
+                    active_lang_list = paddle_display_names
                 window['-LANG_COMBO-'].update(values=active_lang_list)
 
                 settings_to_load = [
@@ -1279,6 +1341,9 @@ def generate_output_path(video_path: str, values: dict[str, Any], default_dir: s
 
     if "Google Lens" in selected_engine_display:
         iso_code = lens_abbr_lookup.get(selected_lang_name, 'en')
+    elif "EasyOCR DirectML" in selected_engine_display:
+        easy_code = easyocr_abbr_lookup.get(selected_lang_name, 'en')
+        iso_code = EASY_TO_ISO_MAP.get(easy_code, easy_code)
     else:
         paddle_code = paddle_abbr_lookup.get(selected_lang_name, 'en')
         iso_code = PADDLE_TO_ISO_MAP.get(paddle_code, paddle_code)
@@ -1693,6 +1758,9 @@ def get_processing_args(values: dict[str, Any], window: sg.Window) -> tuple[dict
     if "Google Lens" in selected_engine_display:
         args['ocr_engine'] = 'google_lens'
         lang_abbr = lens_abbr_lookup.get(values.get('-LANG_COMBO-', DEFAULT_SUBTITLE_LANGUAGE))
+    elif "EasyOCR DirectML" in selected_engine_display:
+        args['ocr_engine'] = 'easyocr_directml'
+        lang_abbr = easyocr_abbr_lookup.get(values.get('-LANG_COMBO-', DEFAULT_SUBTITLE_LANGUAGE))
     else:
         args['ocr_engine'] = 'paddleocr'
         lang_abbr = paddle_abbr_lookup.get(values.get('-LANG_COMBO-', DEFAULT_SUBTITLE_LANGUAGE))
@@ -1775,7 +1843,7 @@ def run_videocr(args_dict: dict[str, Any], window: sg.Window) -> bool:
         gui_queue.put(('-VIDEOCR_OUTPUT-', error_msg))
         return False
 
-    command = [VIDEOCR_PATH]
+    command = VIDEOCR_PATH[:] if isinstance(VIDEOCR_PATH, list) else [VIDEOCR_PATH]
 
     for key, value in args_dict.items():
         if value is not None and value != '':
@@ -1795,6 +1863,7 @@ def run_videocr(args_dict: dict[str, Any], window: sg.Window) -> bool:
     REPACKING_PATTERN = re.compile(r"Analyzing frame (\d+) of (\d+)")
     STARTING_PADDLEOCR_PATTERN = re.compile(r"Starting PaddleOCR\.\.\.")
     STARTING_LENS_PATTERN = re.compile(r"Starting Google Lens CLI\.\.\.")
+    STARTING_EASYOCR_PATTERN = re.compile(r"Starting EasyOCR(?: DirectML)?\.\.\.")
     INFO_PASS_PATTERN = re.compile(r"Running Text-Detection-Only pass on (\d+) filtered frame\(s\) stitched into (\d+) image grid\(s\)\.\.\.")
     FILTERED_PATTERN = re.compile(r"Filtered out (\d+) redundant frame\(s\) via Text-Detection and tight-box SSIM analysis\.")
     GENERATING_SUBTITLES_PATTERN = re.compile(r"Generating subtitles\.\.\.")
@@ -1939,6 +2008,10 @@ def run_videocr(args_dict: dict[str, Any], window: sg.Window) -> bool:
                 if STARTING_LENS_PATTERN.search(line):
                     gui_queue.put(('-VIDEOCR_OUTPUT-', LANG.get('cli_starting_lens', line) + '\n'))
                     gui_queue.put(('-PROGRESS-SMOOTH-', {'text': LANG.get('cli_starting_lens', line), 'percent': None}))
+                    continue
+                if STARTING_EASYOCR_PATTERN.search(line):
+                    gui_queue.put(('-VIDEOCR_OUTPUT-', line.strip() + '\n'))
+                    gui_queue.put(('-PROGRESS-SMOOTH-', {'text': line.strip(), 'percent': None}))
                     continue
                 if GENERATING_SUBTITLES_PATTERN.search(line):
                     gui_queue.put(('-VIDEOCR_OUTPUT-', LANG.get('cli_generating_subs', line) + '\n'))
@@ -2943,6 +3016,9 @@ while True:
 
                 if "Google Lens" in selected_engine_display:
                     iso_code = lens_abbr_lookup.get(selected_lang_name, 'en')
+                elif "EasyOCR DirectML" in selected_engine_display:
+                    easy_code = easyocr_abbr_lookup.get(selected_lang_name, 'en')
+                    iso_code = EASY_TO_ISO_MAP.get(easy_code, easy_code)
                 else:
                     paddle_code = paddle_abbr_lookup.get(selected_lang_name, 'en')
                     iso_code = PADDLE_TO_ISO_MAP.get(paddle_code, paddle_code)
@@ -2952,7 +3028,9 @@ while True:
                     directory = p.parent
                     known_codes = set(paddle_abbr_lookup.values()).union(
                         set(PADDLE_TO_ISO_MAP.values()),
-                        set(lens_abbr_lookup.values())
+                        set(lens_abbr_lookup.values()),
+                        set(easyocr_abbr_lookup.values()),
+                        set(EASY_TO_ISO_MAP.values())
                     )
                     base_name = None
 
@@ -2987,6 +3065,8 @@ while True:
 
             if "Google Lens" in selected_engine:
                 new_values = lens_display_names
+            elif "EasyOCR DirectML" in selected_engine:
+                new_values = easyocr_display_names
             else:
                 new_values = paddle_display_names
 
@@ -3098,7 +3178,11 @@ while True:
             "• Hybrid processing.\n"
             "• PaddleOCR handles text detection locally.\n"
             "• Google Lens (online) handles text recognition.\n"
-            "• Requires an active internet connection.")),
+            "• Requires an active internet connection.\n\n"
+            "EasyOCR DirectML (AMD GPU):\n"
+            "• Experimental local DirectML backend for Windows AMD GPUs.\n"
+            "• Uses EasyOCR for detection and recognition.\n"
+            "• Requires easyocr and torch-directml.")),
             icon=ICON_PATH
         )
 
@@ -3920,6 +4004,10 @@ while True:
                     engine_display = OCR_ENGINES[1]
                     active_lang_list = lens_display_names
                     lookup = lens_abbr_lookup
+                elif saved_engine == 'easyocr_directml':
+                    engine_display = OCR_ENGINES[2]
+                    active_lang_list = easyocr_display_names
+                    lookup = easyocr_abbr_lookup
                 else:
                     engine_display = OCR_ENGINES[0]
                     active_lang_list = paddle_display_names

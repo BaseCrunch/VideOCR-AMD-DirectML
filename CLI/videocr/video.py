@@ -510,6 +510,65 @@ class Video:
             if det_counter == 0:
                 return
 
+            if ocr_engine == "easyocr_directml":
+                # EasyOCR DirectML handles detection and recognition in a single
+                # pass. It uses the same stitched frame grids prepared above,
+                # then maps every recognized line back into VideOCR's normal
+                # per-frame prediction model. This avoids any CUDA/PaddleOCR
+                # dependency for AMD GPUs on Windows.
+                from .easyocr_directml import run_easyocr_on_stitched_images
+
+                total_stitched_frames = sum(len(mappings) for mappings in det_stitch_map.values())
+                total_grids = len(det_stitch_map)
+                print(
+                    f"Running EasyOCR DirectML pass on {total_stitched_frames} filtered frame(s) "
+                    f"stitched into {total_grids} image grid(s)...",
+                    flush=True
+                )
+
+                ocr_outputs = run_easyocr_on_stitched_images(
+                    det_stitched_dir,
+                    det_stitch_map,
+                    self.lang,
+                    use_gpu
+                )
+
+                active_frame_coords: set[tuple[int, int]] = set()
+                for mappings in det_stitch_map.values():
+                    for m in mappings:
+                        active_frame_coords.add((int(m["frame_idx"]), int(m["zone_idx"])))
+
+                frame_predictions_dict: dict[int, dict[int, PredictedFrames]] = {0: {}, 1: {}}
+
+                for frame_index, zone_index in active_frame_coords:
+                    ocr_result = ocr_outputs.get((frame_index, zone_index), [])
+                    pred_data = [ocr_result] if ocr_result else [[]]
+                    predicted_frame = PredictedFrames(
+                        ocr_engine, frame_index, pred_data, conf_threshold_ratio,
+                        zone_index, lang, normalize_to_simplified_chinese
+                    )
+                    frame_predictions_dict[zone_index][frame_index] = predicted_frame
+
+                frame_predictions_list: dict[int, list[PredictedFrames]] = {}
+
+                for zone_idx in frame_predictions_dict:
+                    frames = sorted(frame_predictions_dict[zone_idx].values(), key=lambda f: f.start_index)
+
+                    if not frames:
+                        continue
+
+                    for i in range(len(frames) - 1):
+                        current_pred = frames[i]
+                        next_pred = frames[i + 1]
+                        current_pred.end_index = next_pred.start_index - 1
+
+                    frames[-1].end_index = ocr_end - 1
+                    frame_predictions_list[zone_idx] = frames
+
+                self.pred_frames_zone1 = frame_predictions_list.get(0, [])
+                self.pred_frames_zone2 = frame_predictions_list.get(1, [])
+                return
+
             # --------------------------------------------------------
             # Detection pass and SSIM filtering on detected text boxes
             # --------------------------------------------------------

@@ -3,13 +3,12 @@
     "tab_batch": "Queue",
     "tab_advanced": "Advanced Settings",
     "tab_about": "About",
-
     "lbl_source": "Source:",
     "lbl_output_srt": "Output SRT:",
     "lbl_ocr_engine": "OCR Engine:",
     "tip_ocr_engine": "Select the OCR engine to use for text detection and recognition.",
     "engine_info": "OCR Engine Information",
-    "engine_message": "PaddleOCR (Det. + Rec.):\n• 100% local processing.\n• Both text detection and recognition are done locally.\n\nPaddleOCR (Det.) + Google Lens (Rec.):\n• Hybrid processing.\n• PaddleOCR handles text detection locally.\n• Google Lens (online) handles text recognition.\n• Requires an active internet connection.",
+    "engine_message": "PaddleOCR (Det. + Rec.):\n• 100% local processing.\n• Both text detection and recognition are done locally.\n\nPaddleOCR (Det.) + Google Lens (Rec.):\n• Hybrid processing.\n• PaddleOCR handles text detection locally.\n• Google Lens (online) handles text recognition.\n• Requires an active internet connection.\n\nEasyOCR DirectML (AMD GPU):\n• Experimental local DirectML backend for Windows AMD GPUs.\n• Uses EasyOCR for detection and recognition.\n• Requires easyocr and torch-directml.",
     "lbl_sub_lang": "Subtitle Language:",
     "lbl_sub_pos": "Subtitle Position:",
     "pos_center": "Center",
@@ -33,7 +32,6 @@
     "lbl_log": "Log:",
     "video_file_types": "Video Files",
     "all_file_types": "All Files",
-
     "lbl_ocr_settings": "OCR Settings:",
     "lbl_time_start": "Start Time (e.g., 0:00 or 1:23:45):",
     "tip_time_start": "Specify the starting time to begin processing.",
@@ -55,8 +53,8 @@
     "tip_frames_skip": "Process every Nth frame (e.g., 1 = every 2nd).\nHigher = faster but less accurate, lower = slower but more accurate.",
     "lbl_min_duration": "Minimum Subtitle Duration (seconds):",
     "tip_min_duration": "Detected subtitles below this duration are omitted from the SRT file.",
-    "chk_use_gpu": "Enable GPU Usage (Only affects GPU version)",
-    "tip_use_gpu": "Attempt to use the GPU for OCR processing if available and supported.",
+    "chk_use_gpu": "Enable GPU Usage (CUDA for PaddleOCR GPU builds, DirectML for EasyOCR DirectML)",
+    "tip_use_gpu": "Attempt to use the GPU for OCR processing if available and supported. For AMD GPUs on Windows, select EasyOCR DirectML.",
     "chk_full_frame": "Use Full Frame OCR",
     "tip_full_frame": "Process the entire video frame instead of using a crop box.",
     "chk_dual_zone": "Enable Dual Zone OCR",
@@ -106,7 +104,6 @@
     "tip_prevent_sleep": "If checked, the computer will be prevented from going to sleep during processing.",
     "chk_check_updates": "Check for Updates On Startup",
     "tip_check_updates": "Automatically check for new versions of VideOCR when the application starts.",
-
     "btn_browse": "Open File...",
     "btn_browse_folder": "Open Folder...",
     "btn_save_as": "Save As...",
@@ -117,7 +114,6 @@
     "btn_add_all_to_queue": "Add All to Queue",
     "btn_pause": "Pause",
     "btn_resume": "Resume",
-
     "lbl_queue_title": "Queue",
     "col_video_file": "Video File",
     "col_output_file": "Output File",
@@ -128,18 +124,15 @@
     "btn_edit": "Edit",
     "btn_remove": "Remove",
     "btn_clear_queue": "Clear Queue",
-
     "tip_batch_up": "Move the selected job up in the current queue",
     "tip_batch_down": "Move the selected job down in the current queue",
     "tip_batch_reset": "Reset a cancelled job",
     "tip_batch_edit": "Send the job back to the main window for editing",
     "tip_batch_remove": "Remove selected job from queue",
     "tip_batch_clear": "Clear the current queue",
-
     "lbl_about_version": "Version: {version}",
     "lbl_get_newest": "Get the newest version here:",
     "lbl_bug_report": "Found a bug or have a suggestion? Feel free to open an issue at:",
-
     "update_title": "Update Available",
     "update_available_1": "A new version of VideOCR ({}) is available!",
     "update_available_2": "You are currently using version {}.",
@@ -148,14 +141,11 @@
     "update_msg_uptodate": "You are running the latest version of VideOCR.",
     "update_title_error": "Error",
     "update_msg_error": "Failed to check for updates.\nPlease check your internet connection.",
-
     "btn_yes": "Yes",
     "btn_no": "No",
-
     "save_as_title": "Save As",
     "save_as_filter_name": "SubRip Subtitle",
     "save_as_all_files": "All Files",
-
     "status_starting": "Starting subtitle extraction...\n",
     "status_success": "Successfully generated subtitle file!\n",
     "status_cancelling": "\nCancelling process...\n",
@@ -167,12 +157,10 @@
     "batch_finished_count": "Batch finished: {} files processed.",
     "status_queue_cancelled": "Queue Cancelled",
     "status_queue_finished": "Queue Finished",
- 
     "lbl_step": "Step",
     "progress_step1_action": "Processing video...",
     "progress_step2_action": "Performing Text-Detection on image {current} of {total} ({percent}%)",
     "progress_step3_action": "Performing OCR on image {current} of {total} ({percent}%)",
-
     "cli_info_pass": "Running Text-Detection-Only pass on {} filtered frame(s) stitched into {} image grid(s)...",
     "cli_filtered": "Filtered out {} redundant frame(s) via Text-Detection and tight-box SSIM analysis.",
     "cli_analyzing": "Analyzing frame {} of {}",
@@ -182,9 +170,7 @@
     "cli_generating_subs": "Generating subtitles...",
     "log_reached_end": "Reached end time. Stopping.",
     "unknown": "unknown",
-
     "eta_step": "ETA Step",
-
     "fatal_error_header": "--- FATAL ERROR ---",
     "fatal_error_reason_1": "Your system does not meet the hardware requirements.",
     "fatal_error_reason_2": "Reason:",
@@ -203,7 +189,6 @@
     "error_no_process_to_cancel": "\nNo process is currently running to cancel.\n",
     "title_error": "Error",
     "error_video_not_found": "Video file not found:\n{}",
-
     "val_err_header": "Validation Errors:\n",
     "val_err_start_time": "Invalid Start Time format. Use MM:SS or HH:MM:SS.",
     "val_err_end_time": "Invalid End Time format. Use MM:SS or HH:MM:SS.",
@@ -216,7 +201,6 @@
     "err_crop_y_out": "{} Y ({}) is outside video height ({}).",
     "err_crop_w_out": "{} extends out of bounds (X+W > Width).",
     "err_crop_h_out": "{} extends out of bounds (Y+H > Height).",
-
     "title_duplicate": "Duplicate",
     "msg_duplicate_queue": "A job for '{}' is already in the queue.\n\nPlease change the output path or delete the job from the Queue.",
     "msg_duplicate_queue_running": "A job for '{}' is currently active (Status: {}).\n\nPlease change the output path or wait for it to finish.",
@@ -224,7 +208,6 @@
     "popup_duplicate_msg": "A job for this output file already exists (Status: {}).\n\nDo you want to update/restart it with current settings?",
     "popup_cannot_edit_running": "A job that is currently {} cannot be edited.\nPlease stop or cancel the process first.",
     "popup_cannot_remove_running": "The currently running or paused job cannot be removed.\nPlease stop or cancel the process first.",
-
     "title_progress": "Progress",
     "msg_scanning_init": "Initializing scan...",
     "msg_scanning_progress": "Scanning file {} of {}...",
@@ -233,7 +216,6 @@
     "title_batch_report": "Batch Report",
     "msg_batch_report_summary": "Added {} videos.\n\nSkipped {} video(s):\n",
     "msg_and_others": "...and others.",
-
     "lbl_when_ready": "When ready:",
     "action_none": "Do Nothing",
     "action_sleep": "Sleep",
@@ -246,7 +228,6 @@
     "lbl_action_countdown": "System will execute '{}' in {} seconds.",
     "btn_proceed": "Proceed Now",
     "log_action_cancelled": "Post-completion action cancelled by user.",
-
     "status_pending": "Pending",
     "status_processing": "Processing",
     "status_completed": "Completed",

@@ -1,0 +1,14 @@
+@echo off
+setlocal
+cd /d "%~dp0"
+if not exist ".venv\Scripts\activate.bat" (
+    echo Missing .venv. Create it first with: py -3.12 -m venv .venv
+    pause
+    exit /b 1
+)
+call ".venv\Scripts\activate.bat"
+REM Force DirectML to use the discrete Radeon GPU on Ryzen+iGPU systems.
+REM Change to 0 only if your RX card is listed as adapter 0.
+set "VIDEOCR_DIRECTML_DEVICE_INDEX=1"
+python VideOCR.py
+pause

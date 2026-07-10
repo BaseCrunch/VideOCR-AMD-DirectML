@@ -22,20 +22,31 @@ def save_subtitles_to_file(
     elif len(subtitle_alignments) == 1:
         subtitle_alignments.append(None)
 
-    paddleocr_path = utils.find_executable("paddleocr")
-    try:
-        utils.perform_hardware_check(paddleocr_path, use_gpu)
-    except SystemExit as e:
-        print(e, flush=True)
-        sys.exit(1)
+    # PaddleOCR and Chrome Lens are standalone helper executables.
+    # EasyOCR DirectML is a pure-Python backend, so it must not require the
+    # PaddleOCR CUDA/CPU bundle or the NVIDIA hardware check.
+    paddleocr_path = ""
+    google_lens_path = ""
+    det_model_dir = ""
+    rec_model_dir = ""
+    cls_model_dir = ""
 
-    if ocr_engine == 'paddleocr':
-        det_model_dir, rec_model_dir, cls_model_dir = utils.resolve_model_dirs(lang, use_server_model)
-    else:
-        # For the Text-Detection-Only Pass just the default detection model is needed
-        det_model_dir, rec_model_dir, cls_model_dir = utils.resolve_model_dirs('en', use_server_model)
+    if ocr_engine in ("paddleocr", "google_lens"):
+        paddleocr_path = utils.find_executable("paddleocr")
+        try:
+            utils.perform_hardware_check(paddleocr_path, use_gpu)
+        except SystemExit as e:
+            print(e, flush=True)
+            sys.exit(1)
 
-    google_lens_path = utils.find_executable("chrome-lens")
+        if ocr_engine == 'paddleocr':
+            det_model_dir, rec_model_dir, cls_model_dir = utils.resolve_model_dirs(lang, use_server_model)
+        else:
+            # For the Text-Detection-Only Pass just the default detection model is needed
+            det_model_dir, rec_model_dir, cls_model_dir = utils.resolve_model_dirs('en', use_server_model)
+
+    if ocr_engine == "google_lens":
+        google_lens_path = utils.find_executable("chrome-lens")
 
     v = Video(video_path, paddleocr_path, det_model_dir, rec_model_dir, cls_model_dir, google_lens_path)
     try:

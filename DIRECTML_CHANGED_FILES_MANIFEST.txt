@@ -1,0 +1,25 @@
+VideOCR AMD DirectML changed files v7
+
+Copy these files/folders over the matching paths in the VideOCR source tree:
+
+VideOCR.py
+build.py
+pyproject.toml
+run_gui_directml_dev.bat
+README_AMD_DIRECTML.md
+DIRECTML_CHANGED_FILES_MANIFEST.txt
+languages/en.json
+CLI/videocr_cli.py
+CLI/videocr/api.py
+CLI/videocr/video.py
+CLI/videocr/easyocr_directml.py
+tools/test_directml.py
+tools/diagnose_easyocr_directml.py
+tools/run_directml_cli_test.bat
+tools/setup_directml_dev.bat
+
+v7 changes:
+- DirectML adapter selection now prefers adapter index 1 on multi-GPU AMD systems.
+- Supports forcing the DirectML adapter with VIDEOCR_DIRECTML_DEVICE_INDEX.
+- Helper BAT files set VIDEOCR_DIRECTML_DEVICE_INDEX=1 for Ryzen+iGPU + RX 7900 XTX systems.
+- DirectML diagnostics print the selected adapter index.

@@ -26,6 +26,9 @@ PADDLE_URLS: dict[str, dict[str, str | list[str]]] = {
         "cpu": "https://github.com/timminator/PaddleOCR-Standalone/releases/download/v{version}/PaddleOCR-CPU-v{version}.7z",
         "gpu-cuda11.8": "https://github.com/timminator/PaddleOCR-Standalone/releases/download/v{version}/PaddleOCR-GPU-v{version}-CUDA-11.8.7z",
         "gpu-cuda12.9": "https://github.com/timminator/PaddleOCR-Standalone/releases/download/v{version}/PaddleOCR-GPU-v{version}-CUDA-12.9.7z",
+        # DirectML uses EasyOCR for AMD GPU acceleration, but keeps the CPU
+        # PaddleOCR helper so the original PaddleOCR/Google Lens modes still work.
+        "gpu-directml": "https://github.com/timminator/PaddleOCR-Standalone/releases/download/v{version}/PaddleOCR-CPU-v{version}.7z",
     },
     "Linux": {
         "cpu": "https://github.com/timminator/PaddleOCR-Standalone/releases/download/v{version}/PaddleOCR-CPU-v{version}-Linux.7z",
@@ -294,7 +297,9 @@ def package_target(build_target: str, args: argparse.Namespace, releases_dir: Pa
 
     is_cli_only = args.cli_only.lower() == 'true'
 
-    if "gpu" in build_target:
+    if build_target == "gpu-directml":
+        display_target_name = "GPU-DirectML"
+    elif "gpu" in build_target:
         display_target_name = build_target.replace("gpu-", "GPU-").replace("cuda", "CUDA-")
     else:
         display_target_name = build_target.upper()
@@ -302,6 +307,10 @@ def package_target(build_target: str, args: argparse.Namespace, releases_dir: Pa
     print_header(f"Packaging for Target: {display_target_name}")
     os_name = "Windows" if sys.platform == "win32" else "Linux"
     os_suffix = "-Linux" if os_name == "Linux" else ""
+
+    if build_target == "gpu-directml" and os_name != "Windows":
+        print("ERROR: gpu-directml is Windows-only because torch-directml/DirectML is Windows-only.")
+        sys.exit(1)
 
     # Create a temporary directory for this target's packaging process
     work_dir = releases_dir / f"work_{build_target}"
@@ -364,7 +373,10 @@ def package_target(build_target: str, args: argparse.Namespace, releases_dir: Pa
     # Define final names
     release_tag = f"-{args.release_type}" if args.release_type else ""
     cuda_suffix = ""
-    if "gpu" in build_target:
+    if build_target == "gpu-directml":
+        base_target_name = "GPU"
+        cuda_suffix = "-DirectML"
+    elif "gpu" in build_target:
         base_target_name = "GPU"
         cuda_version = build_target.split('-')[-1]
         cuda_suffix = f"-{cuda_version.replace('cuda', 'CUDA-')}"
@@ -431,9 +443,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="VideOCR Build Script", formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument(
         "--target",
-        choices=["cpu", "gpu", "gpu-cuda11.8", "gpu-cuda12.9", "all"],
+        choices=["cpu", "gpu", "gpu-cuda11.8", "gpu-cuda12.9", "gpu-directml", "all"],
         default="cpu",
-        help="The build target: 'cpu', 'gpu' (builds all GPU versions), specific gpu targets, or 'all'. Defaults to 'cpu'."
+        help="The build target: 'cpu', 'gpu' (builds all GPU versions), specific gpu targets including 'gpu-directml', or 'all'. Defaults to 'cpu'."
     )
     parser.add_argument(
         "--cli-only",
@@ -479,6 +491,25 @@ def main() -> None:
         check_tkinter()
         check_dbus()
     check_7zip()
+
+    if args.target in ("gpu", "gpu-directml", "all") and sys.platform == "win32":
+        print_header("Checking DirectML Python dependencies...")
+        missing_directml_deps: list[str] = []
+        try:
+            import easyocr  # type: ignore  # noqa: F401
+        except Exception:
+            missing_directml_deps.append("easyocr")
+        try:
+            import torch_directml  # type: ignore  # noqa: F401
+        except Exception:
+            missing_directml_deps.append("torch-directml")
+
+        if missing_directml_deps:
+            print("ERROR: Missing DirectML dependency/dependencies: " + ", ".join(missing_directml_deps))
+            print("Install them before building the DirectML target:")
+            print("  python -m pip install ".[directml]"")
+            sys.exit(1)
+        print("DirectML dependencies found.")
 
     paddle_version = get_latest_paddle_version()
     chrome_lens_version = get_latest_chrome_lens_version()
@@ -528,15 +559,21 @@ def main() -> None:
         targets_to_build = ['cpu']
     elif args.target == 'gpu':
         targets_to_build = ['gpu-cuda11.8', 'gpu-cuda12.9']
+        if sys.platform == "win32":
+            targets_to_build.append('gpu-directml')
     elif args.target == 'all':
         targets_to_build = ['cpu', 'gpu-cuda11.8', 'gpu-cuda12.9']
+        if sys.platform == "win32":
+            targets_to_build.append('gpu-directml')
     else:
         targets_to_build = [args.target]
 
     for i, build_target in enumerate(targets_to_build):
         package_target(build_target, args, releases_dir, gui_dist_folder, cli_dist_folder, paddle_version, chrome_lens_version)
         if i < len(targets_to_build) - 1:
-            if "gpu" in build_target:
+            if build_target == "gpu-directml":
+                completed_target_name = "GPU-DirectML"
+            elif "gpu" in build_target:
                 completed_target_name = build_target.replace("gpu-", "GPU-").replace("cuda", "CUDA-")
             else:
                 completed_target_name = build_target.upper()
